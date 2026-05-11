@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>What The Puff — Live Dashboard</title>
+<meta name="theme-color" content="#111">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="WTP Dashboard">
+<link rel="manifest" href="manifest.json">
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getFirestore, collection, query, orderBy, onSnapshot, doc, updateDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+  const cfg = {
+    apiKey:"AIzaSyAPCeTkc3cTqRNIDRhKQcpjrsUcckIUg68",
+    authDomain:"whatthepuff-be1ce.firebaseapp.com",
+    projectId:"whatthepuff-be1ce",
+    storageBucket:"whatthepuff-be1ce.firebasestorage.app",
+    messagingSenderId:"743661932433",
+    appId:"1:743661932433:web:1d510f245d2c513df21430"
+  };
+  const app = initializeApp(cfg);
+  const db = getFirestore(app);
+
+  let allTransactions = [];
+
+  window.voidTransaction = async function(firebaseId, txnId) {
+    const pin = document.getElementById('void-pin-input').value.trim();
+    if (pin !== '9999') {
+      document.getElementById('void-pin-error').textContent = 'Wrong admin PIN.';
+      return;
+    }
+    try {
+      await updateDoc(doc(db, 'transactions', firebaseId), { voided: true, voidedAt: new Date().toISOString() });
+      closeVoidModal();
+      showToast('🗑️', 'Transaction voided: ' + txnId);
+    } catch(e) {
+      document.getElementById('void-pin-error').textContent = 'Error: ' + e.message;
+    }
+  };
+
+  function todayFormatted() {
+    return new Date().toLocaleDateString('en-SG',{day:'2-digit',month:'short',year:'numeric'});
+  }
+
+  function getDateFilter() {
+    const v = document.getElementById('date-filter').value;
+    if (!v) return todayFormatted();
+    const p = v.split('-');
+    const months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return p[2].replace(/^0/,'') + ' ' + months[parseInt(p[1])-1] + ' ' + p[0];
+  }
+
+  window.refreshDashboard = function() {
+    const dateStr = getDateFilter();
+    const outlet = document.getElementById('outlet-filter').value;
+    let txns = allTransactions.filter(t => !t.voided && t.date === dateStr);
+    if (outlet !== 'All') txns = txns.filter(t => t.outlet === outlet);
+    renderDashboard(txns, allTransactions.filter(t=>!t.voided));
+  };
+
+  function renderDashboard(txns, allNonVoided) {
+    const grossRev = txns.reduce((s,t) => s + (t.subtotal||t.total), 0);
+    const discTotal = txns.reduce((s,t) => s + (t.discount||0), 0);
+    const netRev = txns.reduce((s,t) => s + t.total, 0);
+    const txnCount = txns.length;
+    const avgOrder = txnCount > 0 ? netRev/txnCount : 0;
+
+    const SKU_NAMES = ["Original","Sardine","Cheesy","Black Pepper","Char Siew","Otah"];
+    const skuQty = {}; SKU_NAMES.forEach(s=>skuQty[s]=0);
+    const payTotals = {cash:0,paynow:0,cdc:0,voucher:0};
+    let totalItems = 0;
+    // Hourly — use integer hour
+    const hourlyRev = {};
+    const hourlyCount = {};
+
+    txns.forEach(t => {
+      (t.items||[]).forEach(i => { skuQty[i.name]=(skuQty[i.name]||0)+i.qty; totalItems+=i.qty; });
+      (t.payments||[]).forEach(p => { payTotals[p.type]=(payTotals[p.type]||0)+p.amount; });
+      const h = typeof t.hour==='number' ? t.hour : (t.timestamp ? new Date(t.timestamp).getHours() : null);
+      if (h !== null) {
+        hourlyRev[h] = (hourlyRev[h]||0) + t.total;
+        hourlyCount[h] = (hourlyCount[h]||0) + 1;
+      }
+    });
+
+    const outletRevenue = {};
+    txns.forEach(t => { outletRevenue[t.outlet]=(outletRevenue[t.outlet]||0)+t.total; });
+
+    // Stat cards
+    document.getElementById('stat-gross').textContent = '$'+grossRev.toFixed(2);
+    document.getElementById('stat-disc').textContent = '-$'+discTotal.toFixed(2);
+    document.getElementById('stat-net').textContent = '$'+netRev.toFixed(2);
+    document.getElementById('stat-txns').textContent = txnCount;
+    document.getElementById('stat-avg').textContent = '$'+avgOrder.toFixed(2);
+    document.getElementById('stat-items').textContent = totalItems;
+
+    // Outlet bars
+    const outlets = ['Bedok 216','Haig Road','Punggol Coast'];
+    const totalOutletRev = Object.values(outletRevenue).reduce((s,v)=>s+v,0)||1;
+    document.getElementById('outlet-breakdown').innerHTML = outlets.map(o => {
+      const rev = outletRevenue[o]||0;
+      const pct = (rev/totalOutletRev*100).toFixed(0);
+      return `<div class="br-row"><span class="br-name">${o}</span><div class="bar-wrap"><div class="bar-fill" style="width:${pct}%"></div></div><span class="br-val">$${rev.toFixed(2)}</span></div>`;
+    }).join('');
+
+    // SKU bars
+    const sortedSKU = Object.entries(skuQty).sort((a,b)=>b[1]-a[1]);
+    const maxQ = sortedSKU[0]?.[1]||1;
+    document.getElementById('sku-breakdown').innerHTML = sortedSKU.map(([name,qty])=>`
+      <div class="br-row"><span class="br-name">${name}</span><div class="bar-wrap"><div class="bar-fill amber" style="width:${Math.round(qty/maxQ*100)}%"></div></div><span class="br-val">${qty} pcs</span></div>`
+    ).join('');
+
+    // Payment bars
+    const payLabels={cash:'💵 Cash',paynow:'📱 PayNow',cdc:'🏠 CDC',voucher:'🎟️ Voucher'};
+    const totalPay=Object.values(payTotals).reduce((s,v)=>s+v,0)||1;
+    document.getElementById('pay-breakdown').innerHTML = Object.entries(payTotals).map(([type,amt])=>`
+      <div class="br-row"><span class="br-name">${payLabels[type]}</span><div class="bar-wrap"><div class="bar-fill green" style="width:${Math.round(amt/totalPay*100)}%"></div></div><span class="br-val">$${amt.toFixed(2)}</span></div>`
+    ).join('');
+
+    // Hourly chart — fixed: iterate 8–21 as integers
+    const hours = [];
+    for (let h=8; h<=21; h++) hours.push(h);
+    const hourVals = hours.map(h => hourlyRev[h]||0);
+    const maxH = Math.max(...hourVals, 0.01);
+    document.getElementById('hourly-chart').innerHTML = hours.map((h,i) => {
+      const pct = Math.round((hourVals[i]/maxH)*100);
+      const lbl = h < 12 ? h+'am' : h===12 ? '12pm' : (h-12)+'pm';
+      const hasData = hourVals[i] > 0;
+      return `<div class="hbar-wrap" title="${lbl}: $${hourVals[i].toFixed(2)} (${hourlyCount[h]||0} txns)">
+        <div class="hbar-amt">${hasData?'$'+hourVals[i].toFixed(0):''}</div>
+        <div class="hbar" style="height:${hasData?Math.max(pct,5):0}%"></div>
+        <div class="hbar-lbl">${lbl}</div>
+      </div>`;
+    }).join('');
+
+    // Transaction log (include all non-voided for log, but show voided with strikethrough in full history)
+    const allSorted = [...allNonVoided].sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp));
+    const voidedAll = allTransactions.filter(t=>t.voided).sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp));
+    const logTxns = allSorted.slice(0,60);
+
+    document.getElementById('txn-log').innerHTML = logTxns.map(t => `
+      <tr>
+        <td class="td-id">${t.txnId||t.id||'—'}</td>
+        <td class="td-dt">${t.date||''} ${t.time||''}</td>
+        <td>${t.outlet||'—'}</td>
+        <td class="td-items">${(t.items||[]).map(i=>`${i.name}×${i.qty}`).join(', ')||'—'}</td>
+        <td>${(t.payments||[]).map(p=>`${p.type} $${p.amount.toFixed(2)}`).join('+')||'—'}</td>
+        <td class="td-total">$${t.total.toFixed(2)}</td>
+        <td><button class="void-btn" onclick="openVoidModal('${t._firebaseId}','${t.txnId||t.id||''}')">Void</button></td>
+      </tr>`).join('') ||
+      '<tr><td colspan="7" class="td-empty">No transactions for selected filters</td></tr>';
+
+    document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleTimeString('en-SG',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    document.getElementById('live-dot').style.background = '#4caf7d';
+  }
+
+  // Real-time listener — try ordered first, fall back to unordered if index missing
+  function startListener(ordered) {
+    const q = ordered
+      ? query(collection(db,'transactions'), orderBy('createdAt','desc'))
+      : collection(db,'transactions');
+
+    onSnapshot(q, snapshot => {
+      allTransactions = [];
+      snapshot.forEach(docSnap => {
+        allTransactions.push({ _firebaseId: docSnap.id, ...docSnap.data() });
+      });
+      document.getElementById('live-dot').style.background = '#4caf7d';
+      document.getElementById('error-banner').style.display = 'none';
+      window.refreshDashboard();
+    }, err => {
+      console.error('Snapshot error:', err.code, err.message);
+      if (ordered && (err.code === 'failed-precondition' || err.code === 'unimplemented')) {
+        // Index not built yet — retry without orderBy
+        console.warn('Index not ready, retrying without orderBy...');
+        startListener(false);
+      } else {
+        document.getElementById('live-dot').style.background = '#e05050';
+        document.getElementById('last-updated').textContent = 'Not connected';
+        const banner = document.getElementById('error-banner');
+        banner.style.display = 'block';
+        banner.textContent = '⚠️ Firebase error: ' + err.code + ' — ' + err.message;
+      }
+    });
+  }
+  startListener(true);
+</script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:#111;color:#f0ede8;font-family:'Segoe UI',system-ui,sans-serif;min-height:100vh}
+:root{
+  --bg:#111;--bg2:#1a1a1a;--bg3:#222;--bg4:#2a2a2a;
+  --border:#2e2e2e;--border2:#3a3a3a;
+  --text:#f0ede8;--text2:#a09890;--text3:#555;
+  --amber:#e8a020;--green:#4caf7d;--red:#e05050;
+  --radius:10px;--radius-sm:6px;
+}
+.topbar{background:var(--bg2);border-bottom:1px solid var(--border);padding:0 24px;height:54px;display:flex;align-items:center;gap:14px;position:sticky;top:0;z-index:10}
+.topbar-brand{font-size:17px;font-weight:700;color:var(--amber)}
+.live-badge{background:#0e2018;border:1px solid var(--green);color:var(--green);font-size:11px;padding:3px 10px;border-radius:20px;display:flex;align-items:center;gap:5px}
+.live-dot{width:7px;height:7px;border-radius:50%;background:#555;transition:background 0.3s}
+.topbar-spacer{flex:1}
+.topbar-time{font-family:monospace;font-size:13px;color:var(--text2)}
+.filters{display:flex;gap:10px;padding:14px 24px;background:var(--bg2);border-bottom:1px solid var(--border);align-items:center;flex-wrap:wrap}
+.filter-label{font-size:13px;color:var(--text2)}
+.filter-select,.filter-input{background:var(--bg3);border:1px solid var(--border2);color:var(--text);font-size:13px;padding:7px 12px;border-radius:var(--radius-sm);outline:none;cursor:pointer}
+.filter-select:focus,.filter-input:focus{border-color:var(--amber)}
+.filter-btn{padding:7px 14px;background:var(--amber);color:#111;border:none;border-radius:var(--radius-sm);font-size:13px;font-weight:600;cursor:pointer}
+.filter-btn:hover{background:#f5c060}
+.last-updated{font-size:11px;color:var(--text3);margin-left:auto}
+.content{padding:20px 24px;max-width:1400px;margin:0 auto}
+.sec-title{font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:12px}
+
+/* Stat grid — 6 cards */
+.stat-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:20px}
+@media(max-width:900px){.stat-grid{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:550px){.stat-grid{grid-template-columns:repeat(2,1fr)}}
+.stat-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px}
+.stat-label{font-size:11px;color:var(--text3);margin-bottom:5px}
+.stat-value{font-size:22px;font-weight:700;color:var(--text);font-family:monospace}
+.stat-value.amber{color:var(--amber)}
+.stat-value.green{color:var(--green)}
+.stat-value.red{color:var(--red)}
+
+/* Hourly */
+.hourly-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:18px;margin-bottom:18px}
+.hbar-chart{display:flex;align-items:flex-end;gap:3px;height:110px}
+.hbar-wrap{flex:1;display:flex;flex-direction:column;align-items:center;gap:1px;height:100%;justify-content:flex-end}
+.hbar-amt{font-size:8px;color:var(--text3);font-family:monospace;height:12px;display:flex;align-items:center;justify-content:center}
+.hbar{width:100%;background:var(--amber);border-radius:2px 2px 0 0;opacity:0.75;cursor:pointer;transition:opacity 0.1s;min-height:0}
+.hbar:hover{opacity:1}
+.hbar-lbl{font-size:8px;color:var(--text3);font-family:monospace;margin-top:2px}
+
+/* Breakdown grid */
+.breakdown-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:18px}
+@media(max-width:800px){.breakdown-grid{grid-template-columns:1fr}}
+.breakdown-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:16px}
+.br-row{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.br-row:last-child{margin-bottom:0}
+.br-name{font-size:12px;color:var(--text2);min-width:90px}
+.bar-wrap{flex:1;height:7px;background:var(--bg4);border-radius:4px;overflow:hidden}
+.bar-fill{height:7px;background:var(--green);border-radius:4px;transition:width 0.5s ease}
+.bar-fill.amber{background:var(--amber)}
+.bar-fill.green{background:var(--green)}
+.br-val{font-size:12px;font-family:monospace;font-weight:500;color:var(--text);min-width:64px;text-align:right}
+
+/* Table */
+.table-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:18px;margin-bottom:20px}
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{text-align:left;padding:8px 10px;color:var(--text3);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;border-bottom:1px solid var(--border)}
+td{padding:9px 10px;border-bottom:1px solid var(--border);color:var(--text2);vertical-align:middle}
+tr:hover td{background:var(--bg3)}
+tr:last-child td{border-bottom:none}
+.td-id{font-family:monospace;color:var(--text3);font-size:11px}
+.td-dt{font-family:monospace;font-size:11px;white-space:nowrap}
+.td-items{max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.td-total{font-family:monospace;font-weight:700;color:var(--amber)}
+.td-empty{text-align:center;color:var(--text3);padding:24px}
+.void-btn{padding:4px 10px;border-radius:4px;border:1px solid var(--red);background:transparent;color:var(--red);font-size:11px;cursor:pointer;transition:all 0.1s}
+.void-btn:hover{background:var(--red);color:#fff}
+
+/* Void modal */
+.void-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:200;align-items:center;justify-content:center}
+.void-overlay.open{display:flex}
+.void-modal{background:#1a1a1a;border:1px solid #3a3a3a;border-radius:12px;padding:24px;width:320px;display:flex;flex-direction:column;gap:14px}
+.void-title{font-size:16px;font-weight:700;color:var(--red)}
+.void-sub{font-size:13px;color:var(--text2)}
+.void-input{padding:10px 14px;background:#222;border:1px solid #3a3a3a;border-radius:6px;color:var(--text);font-size:18px;font-family:monospace;letter-spacing:4px;text-align:center;outline:none;width:100%}
+.void-input:focus{border-color:var(--amber)}
+.void-error{font-size:12px;color:var(--red);min-height:16px}
+.void-actions{display:flex;gap:10px}
+.void-cancel{flex:1;padding:11px;border-radius:6px;border:1px solid #3a3a3a;background:#222;color:var(--text2);font-size:14px;cursor:pointer}
+.void-confirm{flex:2;padding:11px;border-radius:6px;border:none;background:var(--red);color:#fff;font-size:14px;font-weight:700;cursor:pointer}
+.void-confirm:hover{background:#f06060}
+
+/* Toast */
+.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%) translateY(80px);background:#222;border:1px solid #3a3a3a;border-radius:var(--radius);padding:10px 18px;font-size:13px;color:var(--text);z-index:300;transition:transform 0.3s;display:flex;align-items:center;gap:8px;white-space:nowrap}
+.toast.show{transform:translateX(-50%) translateY(0)}
+@media(max-width:600px){
+  .topbar{padding:0 14px}
+  .filters{padding:10px 14px}
+  .content{padding:14px}
+  .hbar-chart{height:80px}
+  .hbar-amt{font-size:7px}
+  .hbar-lbl{font-size:7px}
+}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <span class="topbar-brand">What The Puff</span>
+  <div class="live-badge"><div class="live-dot" id="live-dot"></div>Live</div>
+  <span class="topbar-spacer"></span>
+  <span class="topbar-time" id="dash-clock"></span>
+</div>
+
+<div class="filters">
+  <span class="filter-label">Outlet:</span>
+  <select class="filter-select" id="outlet-filter" onchange="refreshDashboard()">
+    <option>All</option><option>Bedok 216</option><option>Haig Road</option><option>Punggol Coast</option>
+  </select>
+  <span class="filter-label">Date:</span>
+  <input class="filter-input" type="date" id="date-filter" onchange="refreshDashboard()">
+  <button class="filter-btn" onclick="document.getElementById('date-filter').value='';refreshDashboard()">Today</button>
+  <span class="last-updated" id="last-updated">Connecting…</span>
+</div>
+
+<div id="error-banner" style="display:none;background:#280e0e;border-bottom:1px solid #e05050;padding:10px 24px;font-size:13px;color:#e05050;font-family:monospace;"></div>
+
+<div class="content">
+
+  <!-- Stat cards -->
+  <div class="stat-grid">
+    <div class="stat-card"><div class="stat-label">Gross Revenue</div><div class="stat-value" id="stat-gross">$0.00</div></div>
+    <div class="stat-card"><div class="stat-label">Discounts Given</div><div class="stat-value red" id="stat-disc">-$0.00</div></div>
+    <div class="stat-card"><div class="stat-label">Net Revenue</div><div class="stat-value amber" id="stat-net">$0.00</div></div>
+    <div class="stat-card"><div class="stat-label">Transactions</div><div class="stat-value" id="stat-txns">0</div></div>
+    <div class="stat-card"><div class="stat-label">Avg Order Value</div><div class="stat-value" id="stat-avg">$0.00</div></div>
+    <div class="stat-card"><div class="stat-label">Items Sold</div><div class="stat-value" id="stat-items">0</div></div>
+  </div>
+
+  <!-- Hourly chart -->
+  <div class="hourly-card">
+    <div class="sec-title">Hourly Sales (Net Revenue)</div>
+    <div class="hbar-chart" id="hourly-chart"></div>
+  </div>
+
+  <!-- Breakdowns -->
+  <div class="breakdown-grid">
+    <div class="breakdown-card"><div class="sec-title">Revenue by Outlet</div><div id="outlet-breakdown"></div></div>
+    <div class="breakdown-card"><div class="sec-title">Sales by SKU</div><div id="sku-breakdown"></div></div>
+    <div class="breakdown-card"><div class="sec-title">Payment Methods</div><div id="pay-breakdown"></div></div>
+  </div>
+
+  <!-- Transaction log -->
+  <div class="table-card">
+    <div class="sec-title" style="margin-bottom:14px">Transaction Log — Latest 60 <span style="font-size:10px;font-weight:400;text-transform:none;color:var(--text3)">(across all dates)</span></div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>TXN ID</th><th>Date / Time</th><th>Outlet</th><th>Items</th><th>Payment</th><th>Total</th><th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="txn-log">
+          <tr><td colspan="7" class="td-empty">Connecting to Firebase…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<!-- VOID MODAL -->
+<div class="void-overlay" id="void-overlay">
+  <div class="void-modal">
+    <div class="void-title">⚠️ Void Transaction</div>
+    <div class="void-sub" id="void-sub">This will permanently remove the transaction from sales figures.</div>
+    <input class="void-input" type="password" id="void-pin-input" maxlength="4" placeholder="Admin PIN" oninput="document.getElementById('void-pin-error').textContent=''">
+    <div class="void-error" id="void-pin-error"></div>
+    <div class="void-actions">
+      <button class="void-cancel" onclick="closeVoidModal()">Cancel</button>
+      <button class="void-confirm" id="void-confirm-btn">Void Transaction</button>
+    </div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast"><span id="t-icon">✅</span><span id="t-msg">Done</span></div>
+
+<script>
+// Clock
+setInterval(()=>{document.getElementById('dash-clock').textContent=new Date().toLocaleTimeString('en-SG',{hour:'2-digit',minute:'2-digit',second:'2-digit'})},1000);
+
+// Void modal
+let currentVoidId = null, currentVoidTxnId = null;
+function openVoidModal(firebaseId, txnId) {
+  currentVoidId = firebaseId;
+  currentVoidTxnId = txnId;
+  document.getElementById('void-sub').textContent = 'Voiding: ' + txnId + ' — enter admin PIN to confirm.';
+  document.getElementById('void-pin-input').value = '';
+  document.getElementById('void-pin-error').textContent = '';
+  document.getElementById('void-confirm-btn').onclick = () => window.voidTransaction(currentVoidId, currentVoidTxnId);
+  document.getElementById('void-overlay').classList.add('open');
+  setTimeout(()=>document.getElementById('void-pin-input').focus(),100);
+}
+function closeVoidModal() {
+  document.getElementById('void-overlay').classList.remove('open');
+  currentVoidId = null; currentVoidTxnId = null;
+}
+
+function showToast(icon, msg) {
+  document.getElementById('t-icon').textContent = icon;
+  document.getElementById('t-msg').textContent = msg;
+  const t = document.getElementById('toast');
+  t.classList.add('show');
+  clearTimeout(window._tt);
+  window._tt = setTimeout(()=>t.classList.remove('show'), 3000);
+}
+if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
+</script>
+</body>
+</html>
