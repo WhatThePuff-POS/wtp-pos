@@ -355,8 +355,7 @@ html,body{height:100%;background:#1a1a1a;font-family:'Segoe UI',system-ui,sans-s
     line-height:1.45;
   }
   .rp-head{text-align:center;padding-bottom:3mm}
-  .rp-brand{font-size:20pt;font-weight:bold;letter-spacing:0.5px;margin-bottom:1mm}
-  .rp-tag{font-size:8.5pt;color:#444;letter-spacing:0.5px}
+  .rp-logo{width:62mm;max-width:100%;display:block;margin:0 auto}
   .rp-sep{border:none;border-top:1.5px solid #000;margin:3mm 0}
   .rp-dash{border:none;border-top:1px dashed #000;margin:3mm 0}
   .rp-meta{text-align:center;font-size:9pt;color:#222;line-height:1.6;margin-bottom:3mm}
@@ -1021,8 +1020,7 @@ function buildReceiptHTML(txn){
   ).join('');
   return `
     <div class="rp-head">
-      <div class="rp-brand">What The Puff</div>
-      <div class="rp-tag">hawker-fresh curry puffs</div>
+      <img src="logo.png" class="rp-logo" alt="What The Puff">
     </div>
     <hr class="rp-sep">
     <div class="rp-meta">

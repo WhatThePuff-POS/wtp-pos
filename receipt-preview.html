@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Receipt Preview</title>
+<style>
+body{background:#888;display:flex;justify-content:center;padding:30px;font-family:sans-serif}
+#receipt-print{
+  background:#fff;
+  font-family:'Courier New',Courier,monospace;
+  font-size:10pt;
+  color:#000;
+  width:76mm;
+  padding:8mm 5mm 12mm;
+  line-height:1.45;
+  box-shadow:0 4px 20px rgba(0,0,0,0.4);
+}
+.rp-head{text-align:center;padding-bottom:3mm}
+.rp-logo{width:62mm;max-width:100%;display:block;margin:0 auto}
+.rp-sep{border:none;border-top:1.5px solid #000;margin:3mm 0}
+.rp-dash{border:none;border-top:1px dashed #000;margin:3mm 0}
+.rp-meta{text-align:center;font-size:9pt;color:#222;line-height:1.6;margin-bottom:3mm}
+.rp-tbl{width:100%;border-collapse:collapse;font-size:10pt}
+.rp-tbl td{padding:1.2mm 0;vertical-align:top}
+.rp-tbl .rp-q{width:18pt;color:#444}
+.rp-tbl .rp-n{padding-right:2mm}
+.rp-tbl .rp-r{text-align:right;white-space:nowrap}
+.rp-tbl .rp-sub-lbl{font-size:9.5pt}
+.rp-tbl .rp-disc{font-size:9pt;color:#444}
+.rp-tbl .rp-tot td{font-size:14pt;font-weight:bold;padding:2mm 0}
+.rp-tbl .rp-pay td{font-size:10pt;padding:1mm 0;text-transform:uppercase;letter-spacing:0.3px}
+.rp-foot{text-align:center;font-size:9pt;color:#333;margin-top:4mm;line-height:1.7}
+.rp-foot .rp-ref{font-size:8pt;color:#666;margin-top:1mm}
+
+@page{margin:0}
+@media print{
+  body{background:none;padding:0}
+  #receipt-print{box-shadow:none;margin:0}
+}
+</style>
+</head>
+<body>
+<div id="receipt-print">
+  <div class="rp-head">
+    <img src="logo.png" class="rp-logo" alt="What The Puff">
+  </div>
+  <hr class="rp-sep">
+  <div class="rp-meta">
+    Punggol Coast<br>
+    12 May 2026 &nbsp; 01:10:40 pm<br>
+    Receipt: <strong>TXN0001</strong>
+  </div>
+  <hr class="rp-dash">
+  <table class="rp-tbl">
+    <tr><td class="rp-q">5x</td><td class="rp-n">Cheesy</td><td class="rp-r">$12.50</td></tr>
+    <tr><td class="rp-q">2x</td><td class="rp-n">Char Siew</td><td class="rp-r">$5.00</td></tr>
+    <tr><td class="rp-q">2x</td><td class="rp-n">Otah</td><td class="rp-r">$5.00</td></tr>
+  </table>
+  <hr class="rp-dash">
+  <table class="rp-tbl">
+    <tr class="rp-sub-lbl"><td colspan="2">Subtotal</td><td class="rp-r">$22.50</td></tr>
+    <tr class="rp-disc"><td></td><td>Senior Disc (10%)</td><td class="rp-r">-$2.25</td></tr>
+  </table>
+  <hr class="rp-sep">
+  <table class="rp-tbl">
+    <tr class="rp-tot"><td colspan="2">TOTAL</td><td class="rp-r">$20.25</td></tr>
+  </table>
+  <hr class="rp-sep">
+  <table class="rp-tbl">
+    <tr class="rp-pay"><td colspan="2">Cash</td><td class="rp-r">$20.25</td></tr>
+  </table>
+  <hr class="rp-dash">
+  <div class="rp-foot">
+    Thank you for your support!<br>
+    See you again soon ☕
+    <div class="rp-ref">TXN0001 &nbsp;·&nbsp; 12 May 2026</div>
+  </div>
+</div>
+</body>
+</html>
