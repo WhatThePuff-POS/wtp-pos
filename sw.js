@@ -1,5 +1,5 @@
-const CACHE = 'wtp-v7';
-const SHELL = ['index.html', 'dashboard.html'];
+const CACHE = 'wtp-v8';
+const SHELL = ['index.html', 'dashboard.html', 'logo.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)));

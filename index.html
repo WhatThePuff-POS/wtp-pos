@@ -1063,7 +1063,13 @@ function buildReceiptHTML(txn){
 }
 function printReceipt(txn){
   document.getElementById('receipt-print').innerHTML=buildReceiptHTML(txn);
-  window.print();
+  const img=document.querySelector('#receipt-print .rp-logo');
+  if(img && !img.complete){
+    img.onload=()=>window.print();
+    img.onerror=()=>window.print();
+  } else {
+    window.print();
+  }
 }
 
 // ============ REPRINT ============
