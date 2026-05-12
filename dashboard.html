@@ -288,9 +288,48 @@ tr:last-child td{border-bottom:none}
   .hbar-amt{font-size:7px}
   .hbar-lbl{font-size:7px}
 }
+/* Dashboard PIN gate */
+.dash-gate{position:fixed;inset:0;background:#111;z-index:999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px}
+.dash-gate.hidden{display:none}
+.dash-gate-brand{font-size:22px;font-weight:700;color:var(--amber)}
+.dash-gate-sub{font-size:13px;color:var(--text3)}
+.dash-pin-dots{display:flex;gap:12px}
+.dash-pin-dot{width:13px;height:13px;border-radius:50%;border:2px solid var(--border2);background:transparent;transition:background 0.15s}
+.dash-pin-dot.filled{background:var(--amber);border-color:var(--amber)}
+.dash-pin-pad{display:grid;grid-template-columns:repeat(3,68px);gap:10px}
+.dash-pin-btn{height:62px;border-radius:var(--radius);border:1px solid var(--border2);background:var(--bg3);color:var(--text);font-size:22px;font-weight:500;cursor:pointer;display:flex;align-items:center;justify-content:center;touch-action:manipulation;-webkit-user-select:none;user-select:none;transition:all 0.1s}
+.dash-pin-btn:active{transform:scale(0.95);background:var(--bg4)}
+.dash-pin-error{color:var(--red);font-size:13px;min-height:18px}
 </style>
 </head>
 <body>
+
+<!-- DASHBOARD PIN GATE -->
+<div class="dash-gate" id="dash-gate">
+  <div class="dash-gate-brand">What The Puff</div>
+  <div class="dash-gate-sub">Enter PIN to view dashboard</div>
+  <div class="dash-pin-dots">
+    <div class="dash-pin-dot" id="dpd0"></div>
+    <div class="dash-pin-dot" id="dpd1"></div>
+    <div class="dash-pin-dot" id="dpd2"></div>
+    <div class="dash-pin-dot" id="dpd3"></div>
+  </div>
+  <div class="dash-pin-error" id="dash-pin-error"></div>
+  <div class="dash-pin-pad">
+    <button class="dash-pin-btn" ontouchstart="event.preventDefault();dashPin('1')" onclick="dashPin('1')">1</button>
+    <button class="dash-pin-btn" ontouchstart="event.preventDefault();dashPin('2')" onclick="dashPin('2')">2</button>
+    <button class="dash-pin-btn" ontouchstart="event.preventDefault();dashPin('3')" onclick="dashPin('3')">3</button>
+    <button class="dash-pin-btn" ontouchstart="event.preventDefault();dashPin('4')" onclick="dashPin('4')">4</button>
+    <button class="dash-pin-btn" ontouchstart="event.preventDefault();dashPin('5')" onclick="dashPin('5')">5</button>
+    <button class="dash-pin-btn" ontouchstart="event.preventDefault();dashPin('6')" onclick="dashPin('6')">6</button>
+    <button class="dash-pin-btn" ontouchstart="event.preventDefault();dashPin('7')" onclick="dashPin('7')">7</button>
+    <button class="dash-pin-btn" ontouchstart="event.preventDefault();dashPin('8')" onclick="dashPin('8')">8</button>
+    <button class="dash-pin-btn" ontouchstart="event.preventDefault();dashPin('9')" onclick="dashPin('9')">9</button>
+    <button class="dash-pin-btn" ontouchstart="event.preventDefault();dashPinDel()" onclick="dashPinDel()">⌫</button>
+    <button class="dash-pin-btn" ontouchstart="event.preventDefault();dashPin('0')" onclick="dashPin('0')">0</button>
+    <button class="dash-pin-btn" style="font-size:13px" ontouchstart="event.preventDefault();dashPinClear()" onclick="dashPinClear()">C</button>
+  </div>
+</div>
 
 <div class="topbar">
   <span class="topbar-brand">What The Puff</span>
@@ -403,6 +442,34 @@ function showToast(icon, msg) {
   window._tt = setTimeout(()=>t.classList.remove('show'), 3000);
 }
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
+
+// Dashboard PIN gate
+const DASH_PIN_HASH='888df25ae35772424a560c7152a1de794440e0ea5cfee62828333a456a506e05';
+let dashPinEntry='';
+async function hashDashPin(pin){
+  const buf=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(pin));
+  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+function dashUpdateDots(){
+  for(let i=0;i<4;i++) document.getElementById('dpd'+i).classList.toggle('filled',i<dashPinEntry.length);
+}
+function dashPin(d){
+  if(dashPinEntry.length>=4) return;
+  dashPinEntry+=d; dashUpdateDots();
+  if(dashPinEntry.length===4) dashCheckPin();
+}
+function dashPinDel(){ dashPinEntry=dashPinEntry.slice(0,-1); dashUpdateDots(); }
+function dashPinClear(){ dashPinEntry=''; dashUpdateDots(); }
+async function dashCheckPin(){
+  const h=await hashDashPin(dashPinEntry);
+  if(h===DASH_PIN_HASH){
+    document.getElementById('dash-gate').classList.add('hidden');
+  } else {
+    document.getElementById('dash-pin-error').textContent='Wrong PIN.';
+    dashPinEntry=''; dashUpdateDots();
+    setTimeout(()=>document.getElementById('dash-pin-error').textContent='',2000);
+  }
+}
 </script>
 </body>
 </html>
