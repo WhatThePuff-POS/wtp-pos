@@ -718,12 +718,13 @@ function closeAdminModal(){
 
 // ============ OUTLET CHANGE ============
 function changeOutlet(){
-  // Highlight current outlet
-  ['Bedok 216','Haig Road','Punggol Coast'].forEach(o=>{
-    const btn=document.getElementById('opick-'+o.replace(/ /g,'-'));
-    if(btn) btn.classList.toggle('active',o===currentOutlet);
+  requireAdmin('Change Outlet','Enter admin PIN to switch outlet',function(){
+    ['Bedok 216','Haig Road','Punggol Coast'].forEach(o=>{
+      const btn=document.getElementById('opick-'+o.replace(/ /g,'-'));
+      if(btn) btn.classList.toggle('active',o===currentOutlet);
+    });
+    document.getElementById('outlet-picker').classList.add('open');
   });
-  document.getElementById('outlet-picker').classList.add('open');
 }
 function setOutlet(o){
   currentOutlet=o;
