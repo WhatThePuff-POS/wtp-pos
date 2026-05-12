@@ -144,9 +144,12 @@ html,body{height:100%;background:#1a1a1a;font-family:'Segoe UI',system-ui,sans-s
 /* SKU grid */
 .sku-area{
   flex:1;padding:10px;
-  display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(2,1fr);
+  display:grid;grid-template-columns:repeat(4,1fr);grid-template-rows:repeat(2,1fr);
   gap:8px;overflow:hidden;min-height:0;
 }
+.sku-btn-custom{border-style:dashed!important;justify-content:center!important;gap:4px}
+.sku-btn-custom .sku-custom-icon{font-size:28px;color:var(--text3);line-height:1}
+.sku-btn-custom .sku-price{color:var(--text3)!important}
 .sku-btn{
   background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);
   display:flex;flex-direction:column;align-items:center;justify-content:flex-end;
@@ -291,7 +294,7 @@ html,body{height:100%;background:#1a1a1a;font-family:'Segoe UI',system-ui,sans-s
   .cashier-panel{flex:none;height:auto;border-right:none;border-bottom:1px solid var(--border);min-height:0}
   .order-panel{flex:none;max-width:100%;min-width:0;height:auto}
   .sku-area{
-    grid-template-columns:repeat(3,1fr);
+    grid-template-columns:repeat(4,1fr);
     grid-template-rows:repeat(2,1fr);
     padding:8px;gap:6px;
     height:52vw;min-height:200px;max-height:320px;
@@ -599,6 +602,22 @@ html,body{height:100%;background:#1a1a1a;font-family:'Segoe UI',system-ui,sans-s
   </div>
 </div>
 
+<!-- CUSTOM ITEM MODAL -->
+<div class="modal-overlay" id="custom-modal">
+  <div class="modal" style="max-width:320px">
+    <div class="modal-title">Add Custom Item</div>
+    <div class="modal-sub">Enter amount and an optional label</div>
+    <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:4px">
+      <input id="custom-amount-input" class="split-input" type="number" min="0" step="0.10" placeholder="Amount ($)" style="font-size:22px;font-family:monospace" oninput="updateCustomConfirm()">
+      <input id="custom-desc-input" class="split-input" type="text" placeholder="Label (optional)" maxlength="30">
+    </div>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="document.getElementById('custom-modal').classList.remove('open')">Cancel</button>
+      <button class="btn-primary" id="custom-confirm-btn" onclick="confirmCustomItem()" disabled>Add to Order</button>
+    </div>
+  </div>
+</div>
+
 <!-- Z-REPORT CONFIRM -->
 <div class="modal-overlay" id="zconfirm-overlay">
   <div class="modal" style="max-width:340px;text-align:center">
@@ -798,7 +817,36 @@ function renderSKUs(){
       <div class="sku-name">${s.name}</div>
       <div class="sku-price">${fmt(s.price)}</div>
     </div>`;
-  }).join('');
+  }).join('')+
+  `<div class="sku-btn sku-btn-custom" onclick="openCustomItem()">
+    <div class="sku-custom-icon">＋</div>
+    <div class="sku-name">Others</div>
+    <div class="sku-price">custom</div>
+  </div>`;
+}
+
+// ============ CUSTOM ITEM ============
+let customCounter=0;
+function openCustomItem(){
+  document.getElementById('custom-amount-input').value='';
+  document.getElementById('custom-desc-input').value='';
+  document.getElementById('custom-confirm-btn').disabled=true;
+  document.getElementById('custom-modal').classList.add('open');
+  setTimeout(()=>document.getElementById('custom-amount-input').focus(),100);
+}
+function updateCustomConfirm(){
+  const v=parseFloat(document.getElementById('custom-amount-input').value);
+  document.getElementById('custom-confirm-btn').disabled=!(v>0);
+}
+function confirmCustomItem(){
+  const amount=parseFloat(document.getElementById('custom-amount-input').value);
+  if(!(amount>0)) return;
+  const label=document.getElementById('custom-desc-input').value.trim()||'Others';
+  customCounter++;
+  const id='c'+customCounter;
+  cart[id]={sku:{id,name:label,price:amount,img:'',custom:true},qty:1};
+  document.getElementById('custom-modal').classList.remove('open');
+  renderAll();
 }
 
 // ============ CART ============
