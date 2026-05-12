@@ -1,4 +1,4 @@
-const CACHE = 'wtp-v11';
+const CACHE = 'wtp-v12';
 const SHELL = ['index.html', 'dashboard.html', 'logo.png'];
 
 self.addEventListener('install', e => {

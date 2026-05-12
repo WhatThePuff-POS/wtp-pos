@@ -692,8 +692,12 @@ function updateAdminDisplay(){
 function checkAdminPin(){
   if(pinValid(adminPin,ADMIN_PIN_ENC)){
     const cb=adminCallback;
+    showToast('🔑','PIN ok — cb:'+(cb?'yes':'NULL'));
     closeAdminModal();
-    if(cb) cb();
+    setTimeout(function(){
+      if(cb){ showToast('▶️','calling cb'); cb(); }
+      else showToast('❌','cb was null');
+    },150);
   } else {
     document.getElementById('admin-pin-error').textContent='Wrong PIN.';
     adminPin='';updateAdminDisplay();
@@ -716,6 +720,7 @@ function changeOutlet(){
   requireAdmin('Change Outlet','Enter admin PIN to switch outlet', showOutletPicker);
 }
 function showOutletPicker(){
+  showToast('🏪','building picker...');
   const existing=document.getElementById('_opick');
   if(existing) existing.remove();
   const overlay=document.createElement('div');
@@ -750,6 +755,7 @@ function showOutletPicker(){
   modal.appendChild(cancel);
   overlay.appendChild(modal);
   document.body.appendChild(overlay);
+  showToast('✅','picker appended');
 }
 
 // ============ CLOCK ============
