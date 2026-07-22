@@ -11,7 +11,7 @@
 <link rel="manifest" href="manifest.json">
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-  import { getFirestore, collection, addDoc, serverTimestamp, doc, updateDoc, query, where, getDocs } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+  import { getFirestore, collection, addDoc, serverTimestamp, doc, updateDoc, query, where, getDocs, onSnapshot, setDoc, increment } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
   const cfg = {
     apiKey:"AIzaSyAPCeTkc3cTqRNIDRhKQcpjrsUcckIUg68",
     authDomain:"whatthepuff-be1ce.firebaseapp.com",
@@ -28,6 +28,12 @@
   window._serverTimestamp = serverTimestamp;
   window._doc = doc;
   window._updateDoc = updateDoc;
+  window._query = query;
+  window._where = where;
+  window._getDocs = getDocs;
+  window._onSnapshot = onSnapshot;
+  window._setDoc = setDoc;
+  window._increment = increment;
   window._fbReady = true;
   setTimeout(()=>{ const d=document.getElementById('sync-dot'); if(d) d.className='sync-dot synced'; },0);
 
@@ -283,6 +289,38 @@ html,body{height:100%;background:#1a1a1a;font-family:'Segoe UI',system-ui,sans-s
 .hour-bar:hover{background:var(--amber)}
 .hour-label{font-size:8px;color:var(--text3);font-family:monospace}
 
+/* Inventory modal */
+.inv-modal{background:var(--bg2);border:1px solid var(--border2);border-radius:14px;padding:20px;width:560px;max-width:95vw;max-height:90vh;display:flex;flex-direction:column}
+.inv-tabs{display:flex;gap:4px;margin-bottom:14px;border-bottom:1px solid var(--border);flex-wrap:wrap}
+.inv-tab{padding:9px 12px;font-size:12.5px;color:var(--text3);cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;touch-action:manipulation}
+.inv-tab.active{color:var(--amber-light);border-bottom-color:var(--amber);font-weight:600}
+.inv-body{overflow-y:auto;flex:1;min-height:0}
+.inv-body::-webkit-scrollbar{width:4px}
+.inv-body::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px}
+.inv-item-select{display:flex;flex-direction:column;gap:6px;margin-bottom:12px;max-height:180px;overflow-y:auto}
+.inv-item-opt{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-radius:var(--radius-sm);border:1px solid var(--border2);background:var(--bg3);cursor:pointer;touch-action:manipulation}
+.inv-item-opt.active{border-color:var(--amber);background:var(--amber-bg)}
+.inv-item-opt .ii-name{font-size:13.5px;color:var(--text)}
+.inv-item-opt .ii-qty{font-size:12px;color:var(--text3);font-family:monospace}
+.inv-form-row{display:flex;gap:10px;align-items:center;margin-bottom:10px}
+.inv-form-row label{font-size:13px;color:var(--text2);min-width:70px}
+.inv-select,.inv-input{flex:1;padding:9px 12px;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--radius-sm);color:var(--text);font-size:14px;font-family:inherit;outline:none}
+.inv-select:focus,.inv-input:focus{border-color:var(--amber)}
+.inv-table{width:100%;border-collapse:collapse;font-size:13px}
+.inv-table th{text-align:left;font-size:10.5px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:0.05em;padding:6px 8px;border-bottom:1px solid var(--border)}
+.inv-table td{padding:8px;border-bottom:1px solid var(--border);color:var(--text)}
+.inv-table .iv-num{font-family:monospace;text-align:right}
+.inv-table .iv-low{color:var(--red);font-weight:700}
+.inv-recon-input{width:70px;padding:6px 8px;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--radius-sm);color:var(--text);font-family:monospace;text-align:right;outline:none}
+.inv-recon-input:focus{border-color:var(--amber)}
+.inv-log-title{font-size:10.5px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:0.05em;margin-top:16px;margin-bottom:4px;padding-top:10px;border-top:1px solid var(--border)}
+.inv-log-entry{font-size:12px;color:var(--text2);padding:6px 0;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;gap:10px}
+.inv-empty{font-size:12.5px;color:var(--text3);text-align:center;padding:16px 0}
+.inv-badge{font-size:10px;padding:2px 6px;border-radius:8px;background:var(--bg4);color:var(--text3)}
+.inv-badge.core{color:var(--amber-light);background:var(--amber-bg)}
+.inv-archive-btn{font-size:11px;color:var(--text3);cursor:pointer;text-decoration:underline}
+.inv-item-row-edit{display:flex;gap:6px;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);flex-wrap:wrap}
+
 /* Terminal closed */
 .terminal-closed{display:none;position:fixed;inset:0;background:var(--bg);z-index:200;flex-direction:column;align-items:center;justify-content:center;gap:14px}
 .terminal-closed.open{display:flex}
@@ -506,6 +544,7 @@ html,body{height:100%;background:#1a1a1a;font-family:'Segoe UI',system-ui,sans-s
       <span class="topbar-time" id="clock"></span>
       <div class="nav-btns">
         <button class="nav-btn" onclick="manualOpenDrawer()">💰 Drawer</button>
+        <button class="nav-btn" onclick="openInventoryModal()">📦 Stock</button>
         <button class="nav-btn" onclick="openXReport()">X-Report</button>
         <button class="nav-btn danger" onclick="openZReport()">Z-Report</button>
       </div>
@@ -592,6 +631,25 @@ html,body{height:100%;background:#1a1a1a;font-family:'Segoe UI',system-ui,sans-s
   <div class="report-modal" id="report-content"></div>
 </div>
 
+<!-- INVENTORY MODAL -->
+<div class="modal-overlay" id="inventory-modal">
+  <div class="inv-modal">
+    <div class="modal-title">📦 Inventory — <span id="inv-outlet-label"></span></div>
+    <div class="inv-tabs">
+      <div class="inv-tab" data-tab="stockin" onclick="switchInvTab('stockin')">Stock In</div>
+      <div class="inv-tab" data-tab="wastage" onclick="switchInvTab('wastage')">Wastage</div>
+      <div class="inv-tab" data-tab="stock" onclick="switchInvTab('stock')">Current Stock</div>
+      <div class="inv-tab" data-tab="recon" onclick="switchInvTab('recon')">Reconcile</div>
+      <div class="inv-tab" data-tab="items" onclick="switchInvTab('items')">Items</div>
+    </div>
+    <div class="inv-body" id="inv-body"></div>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="document.getElementById('inventory-modal').classList.remove('open')">Close</button>
+      <button class="btn-primary" id="inv-primary-btn" style="display:none"></button>
+    </div>
+  </div>
+</div>
+
 <!-- TERMINAL CLOSED -->
 <div class="terminal-closed" id="terminal-closed">
   <div style="font-size:56px;opacity:0.3">🔒</div>
@@ -670,6 +728,14 @@ let currentOutlet='Bedok 216';
 let adminCallback=null;
 let adminMode='outlet';
 let statsUnlocked=false;
+let inventoryItems=[];       // catalog: {id,name,unit,skuId,perPuffQty,active}
+let stockLevels={};          // itemId -> qty on hand, for currentOutlet
+let invStockUnsub=null;
+let invActiveTab='stockin';
+let invSelectedItemId=null;
+let invWastageReason='Dropped';
+let invShowArchived=false;
+let sessionInvLog=[];        // {type:'in'|'waste',itemName,qty,unit,detail,time} — this session only, for quick review
 
 // ============ SESSION PERSISTENCE (crash recovery) ============
 function _lsAvailable(){try{localStorage.setItem('__t','1');localStorage.removeItem('__t');return true;}catch(e){return false;}}
@@ -725,6 +791,8 @@ function checkPin(){
     document.getElementById('outlet-name-display').textContent=currentOutlet;
     document.getElementById('login-screen').classList.add('hidden');
     localStorage.setItem('wtp_outlet',currentOutlet);
+    bootInventoryCatalog();
+    subscribeStockLevels();
     updateTxnDisplay();
     updateTopbarStats();
     if('wakeLock' in navigator) navigator.wakeLock.request('screen').then(wl=>window._wakeLock=wl).catch(()=>{});
@@ -800,6 +868,7 @@ function checkAdminPin(){
         currentOutlet=o;
         document.getElementById('outlet-name-display').textContent=o;
         localStorage.setItem('wtp_outlet',o);
+        subscribeStockLevels();
         closeAdminModal();
         showToast('📍','Outlet: '+o);
       };
@@ -883,6 +952,336 @@ async function saveToCloud(txn){
     localStorage.setItem('wtp_txns',JSON.stringify(local));
     showToast('⚠️','Offline — saved locally');
   }
+}
+
+// ============ INVENTORY ============
+function stockDocId(outlet,itemId){ return outlet.replace(/\s+/g,'_')+'__'+itemId; }
+
+function sortedInventoryItems(items){
+  const core=items.filter(i=>i.skuId!=null).sort((a,b)=>a.skuId-b.skuId);
+  const custom=items.filter(i=>i.skuId==null).sort((a,b)=>a.name.localeCompare(b.name));
+  return [...core,...custom];
+}
+
+async function ensureInventoryCatalog(){
+  try{
+    if(!window._fbReady) return;
+    const snap=await window._getDocs(window._collection(window._db,'inventoryItems'));
+    if(!snap.empty) return;
+    const defaults=[
+      ...SKUS.map(s=>({name:s.name,unit:'pcs',skuId:s.id,perPuffQty:0,active:true})),
+      {name:'Packaging',unit:'pcs',skuId:null,perPuffQty:0,active:true},
+      {name:'Boxes',unit:'pcs',skuId:null,perPuffQty:0,active:true},
+      {name:'Filling',unit:'packet',skuId:null,perPuffQty:0,active:true},
+      {name:'Dough Balls',unit:'pcs',skuId:null,perPuffQty:0,active:true}
+    ];
+    for(const it of defaults){
+      await window._addDoc(window._collection(window._db,'inventoryItems'),{...it,createdAt:window._serverTimestamp()});
+    }
+  }catch(e){ /* offline at boot — will retry next login */ }
+}
+
+function subscribeInventoryCatalog(){
+  if(!window._fbReady) return;
+  window._onSnapshot(window._collection(window._db,'inventoryItems'), snap=>{
+    inventoryItems=[];
+    snap.forEach(d=>inventoryItems.push({id:d.id,...d.data()}));
+    if(document.getElementById('inventory-modal').classList.contains('open')) renderInvBody();
+  }, ()=>{});
+}
+
+let invCatalogBooted=false;
+function bootInventoryCatalog(){
+  if(invCatalogBooted) return;
+  invCatalogBooted=true;
+  ensureInventoryCatalog().then(subscribeInventoryCatalog);
+}
+
+function subscribeStockLevels(){
+  if(!window._fbReady||!currentOutlet) return;
+  if(invStockUnsub){ invStockUnsub(); invStockUnsub=null; }
+  const q=window._query(window._collection(window._db,'inventoryStock'), window._where('outlet','==',currentOutlet));
+  invStockUnsub=window._onSnapshot(q, snap=>{
+    stockLevels={};
+    snap.forEach(d=>{const data=d.data(); stockLevels[data.itemId]=data.qty||0;});
+    if(document.getElementById('inventory-modal').classList.contains('open')) renderInvBody();
+  }, ()=>{});
+}
+
+async function adjustStock(itemId,delta){
+  stockLevels[itemId]=(stockLevels[itemId]||0)+delta;
+  const outlet=currentOutlet;
+  try{
+    if(!window._fbReady) throw new Error('not ready');
+    await window._setDoc(window._doc(window._db,'inventoryStock',stockDocId(outlet,itemId)),{
+      outlet, itemId, qty:window._increment(delta), updatedAt:window._serverTimestamp()
+    },{merge:true});
+  }catch(e){
+    const q=JSON.parse(localStorage.getItem('wtp_stock_adj')||'[]');
+    q.push({outlet,itemId,delta,ts:new Date().toISOString()});
+    localStorage.setItem('wtp_stock_adj',JSON.stringify(q));
+  }
+}
+
+async function setStockAbsolute(itemId,qty){
+  stockLevels[itemId]=qty;
+  const outlet=currentOutlet;
+  try{
+    if(!window._fbReady) throw new Error('not ready');
+    await window._setDoc(window._doc(window._db,'inventoryStock',stockDocId(outlet,itemId)),{
+      outlet, itemId, qty, updatedAt:window._serverTimestamp()
+    },{merge:true});
+  }catch(e){
+    const q=JSON.parse(localStorage.getItem('wtp_stock_set')||'[]');
+    q.push({outlet,itemId,qty,ts:new Date().toISOString()});
+    localStorage.setItem('wtp_stock_set',JSON.stringify(q));
+  }
+}
+
+function applyInventoryForSale(cartObj){
+  let totalPuffQty=0;
+  const puffSales=[];
+  Object.values(cartObj).forEach(({sku,qty})=>{
+    if(sku.custom) return;
+    totalPuffQty+=qty;
+    puffSales.push({skuId:sku.id,qty});
+  });
+  if(!totalPuffQty) return;
+  puffSales.forEach(({skuId,qty})=>{
+    const item=inventoryItems.find(i=>i.skuId===skuId);
+    if(item) adjustStock(item.id,-qty);
+  });
+  inventoryItems.forEach(item=>{
+    if(item.skuId==null && item.active!==false && item.perPuffQty>0){
+      adjustStock(item.id,-(item.perPuffQty*totalPuffQty));
+    }
+  });
+}
+
+async function logStockEntry(item,qty,note){
+  adjustStock(item.id,qty);
+  try{
+    await window._addDoc(window._collection(window._db,'stockEntries'),{
+      outlet:currentOutlet, itemId:item.id, itemName:item.name, unit:item.unit,
+      qty, note:note||'', timestamp:new Date().toISOString(), createdAt:window._serverTimestamp()
+    });
+  }catch(e){ /* stock already adjusted locally & queued for retry; log record is best-effort */ }
+}
+
+async function logWastageEntry(item,qty,reason,note){
+  adjustStock(item.id,-qty);
+  try{
+    await window._addDoc(window._collection(window._db,'wastageEntries'),{
+      outlet:currentOutlet, itemId:item.id, itemName:item.name, unit:item.unit,
+      qty, reason:reason||'Other', note:note||'', timestamp:new Date().toISOString(), createdAt:window._serverTimestamp()
+    });
+  }catch(e){}
+}
+
+async function submitReconciliationEntries(counts){
+  counts.forEach(c=>setStockAbsolute(c.itemId,c.actualQty));
+  try{
+    await window._addDoc(window._collection(window._db,'reconciliations'),{
+      outlet:currentOutlet,
+      date:new Date().toLocaleDateString('en-SG',{day:'2-digit',month:'short',year:'numeric'}),
+      counts, timestamp:new Date().toISOString(), createdAt:window._serverTimestamp()
+    });
+  }catch(e){}
+}
+
+async function addInventoryItem(name,unit,perPuffQty){
+  await window._addDoc(window._collection(window._db,'inventoryItems'),{
+    name, unit, skuId:null, perPuffQty:perPuffQty||0, active:true, createdAt:window._serverTimestamp()
+  });
+}
+function updateInventoryItem(id,fields){
+  window._updateDoc(window._doc(window._db,'inventoryItems',id),fields).catch(()=>{
+    showToast('⚠️','Could not save — check connection');
+  });
+}
+
+// ---- Inventory modal / tabs ----
+function openInventoryModal(){
+  document.getElementById('inv-outlet-label').textContent=currentOutlet;
+  invActiveTab='stockin';invSelectedItemId=null;
+  document.getElementById('inventory-modal').classList.add('open');
+  renderInvBody();
+}
+function switchInvTab(tab){
+  invActiveTab=tab;invSelectedItemId=null;
+  renderInvBody();
+}
+function renderInvBody(){
+  document.querySelectorAll('.inv-tab').forEach(t=>t.classList.toggle('active',t.dataset.tab===invActiveTab));
+  const body=document.getElementById('inv-body');
+  if(invActiveTab==='stockin') body.innerHTML=renderStockFormTab('in');
+  else if(invActiveTab==='wastage') body.innerHTML=renderStockFormTab('waste');
+  else if(invActiveTab==='stock') body.innerHTML=renderStockTable();
+  else if(invActiveTab==='recon') body.innerHTML=renderReconTab();
+  else if(invActiveTab==='items') body.innerHTML=renderItemsTab();
+  updateInvPrimaryButton();
+}
+
+function updateInvPrimaryButton(){
+  const btn=document.getElementById('inv-primary-btn');
+  if(invActiveTab==='stockin'||invActiveTab==='wastage'){
+    btn.style.display='';
+    btn.disabled=!invSelectedItemId;
+    btn.textContent=invActiveTab==='stockin'?'Add Stock':'Log Wastage';
+    btn.onclick=function(){ submitInvForm(invActiveTab==='stockin'?'in':'waste'); };
+  } else if(invActiveTab==='recon'){
+    btn.style.display='';
+    btn.disabled=false;
+    btn.textContent='Submit Reconciliation';
+    btn.onclick=submitReconTab;
+  } else if(invActiveTab==='items'){
+    btn.style.display='';
+    btn.disabled=false;
+    btn.textContent='＋ Add Item';
+    btn.onclick=submitNewItem;
+  } else {
+    btn.style.display='none';
+    btn.onclick=null;
+  }
+}
+
+function renderStockFormTab(mode){
+  const items=sortedInventoryItems(inventoryItems.filter(i=>i.active!==false));
+  if(!items.length) return '<div class="inv-empty">No inventory items yet. Add one in the Items tab.</div>';
+  const opts=items.map(it=>{
+    const active=invSelectedItemId===it.id;
+    const qty=stockLevels[it.id]||0;
+    return `<div class="inv-item-opt${active?' active':''}" onclick="selectInvItem('${it.id}')">
+      <span class="ii-name">${it.name}</span><span class="ii-qty">${qty} ${it.unit}</span>
+    </div>`;
+  }).join('');
+  const selected=items.find(i=>i.id===invSelectedItemId);
+  const reasonRow = mode==='waste' ? `
+    <div class="inv-form-row"><label>Reason</label>
+      <select class="inv-select" id="inv-reason-select">
+        <option${invWastageReason==='Dropped'?' selected':''}>Dropped</option>
+        <option${invWastageReason==='Burnt'?' selected':''}>Burnt</option>
+        <option${invWastageReason==='Expired'?' selected':''}>Expired</option>
+        <option${invWastageReason==='Other'?' selected':''}>Other</option>
+      </select>
+    </div>
+    <div class="inv-form-row"><label>Details</label>
+      <input class="inv-input" id="inv-note-input" type="text" placeholder="Optional details (required helps for 'Other')" maxlength="60">
+    </div>` : `
+    <div class="inv-form-row"><label>Note</label>
+      <input class="inv-input" id="inv-note-input" type="text" placeholder="Optional note" maxlength="60">
+    </div>`;
+  const formHtml = selected ? `
+    <div class="modal-sub" style="margin-top:8px">${mode==='in'?'Add stock: ':'Log wastage: '}<strong style="color:var(--text)">${selected.name}</strong> (on hand: ${stockLevels[selected.id]||0} ${selected.unit})</div>
+    <div class="inv-form-row"><label>Qty (${selected.unit})</label><input class="inv-input" type="number" min="0" step="1" id="inv-qty-input" placeholder="0"></div>
+    ${reasonRow}
+  ` : `<div class="modal-sub" style="margin-top:8px">Select an item above</div>`;
+  const relevant=sessionInvLog.filter(l=>l.type===mode);
+  const logHtml = relevant.length ? `
+    <div class="inv-log-title">Logged this session</div>
+    ${relevant.map(l=>`<div class="inv-log-entry"><span>${l.itemName} — ${l.qty} ${l.unit}${l.detail?' ('+l.detail+')':''}</span><span>${l.time}</span></div>`).join('')}
+  ` : '';
+  return `<div class="inv-item-select">${opts}</div>${formHtml}${logHtml}`;
+}
+function selectInvItem(id){ invSelectedItemId=id; renderInvBody(); }
+function submitInvForm(mode){
+  const item=inventoryItems.find(i=>i.id===invSelectedItemId);
+  if(!item) return;
+  const qty=parseFloat(document.getElementById('inv-qty-input').value);
+  if(!(qty>0)){showToast('⚠️','Enter a valid quantity');return;}
+  const note=document.getElementById('inv-note-input').value.trim();
+  const nowLabel=new Date().toLocaleTimeString('en-SG',{hour:'2-digit',minute:'2-digit'});
+  if(mode==='in'){
+    logStockEntry(item,qty,note);
+    sessionInvLog.unshift({type:'in',itemName:item.name,qty,unit:item.unit,detail:note,time:nowLabel});
+    showToast('📦','Added '+qty+' '+item.unit+' — '+item.name);
+  } else {
+    invWastageReason=document.getElementById('inv-reason-select').value;
+    logWastageEntry(item,qty,invWastageReason,note);
+    const detail=invWastageReason+(note?' — '+note:'');
+    sessionInvLog.unshift({type:'waste',itemName:item.name,qty,unit:item.unit,detail,time:nowLabel});
+    showToast('🗑️','Logged '+qty+' '+item.unit+' wastage — '+item.name);
+  }
+  sessionInvLog=sessionInvLog.slice(0,20);
+  invSelectedItemId=null;
+  renderInvBody();
+}
+
+function renderStockTable(){
+  const items=sortedInventoryItems(inventoryItems.filter(i=>i.active!==false));
+  if(!items.length) return '<div class="inv-empty">No inventory items yet.</div>';
+  const rows=items.map(it=>{
+    const qty=stockLevels[it.id]||0;
+    const low=qty<=5;
+    return `<tr><td>${it.name}</td><td class="iv-num">${it.unit}</td><td class="iv-num${low?' iv-low':''}">${qty}</td></tr>`;
+  }).join('');
+  return `<table class="inv-table"><thead><tr><th>Item</th><th>Unit</th><th>On Hand</th></tr></thead><tbody>${rows}</tbody></table>
+    <div class="inv-empty" style="text-align:left;padding-top:10px">🔴 Red = 5 or fewer remaining</div>`;
+}
+
+function renderReconTab(){
+  const items=sortedInventoryItems(inventoryItems.filter(i=>i.active!==false));
+  if(!items.length) return '<div class="inv-empty">No inventory items yet.</div>';
+  const rows=items.map(it=>{
+    const expected=stockLevels[it.id]||0;
+    return `<tr><td>${it.name} <span style="color:var(--text3);font-size:11px">(${it.unit})</span></td>
+      <td class="iv-num">${expected}</td>
+      <td class="iv-num"><input class="inv-recon-input" type="number" min="0" step="1" data-item="${it.id}" placeholder="${expected}"></td></tr>`;
+  }).join('');
+  return `<div class="modal-sub">Count actual stock on hand. Leave a row blank to keep its expected qty unchanged.</div>
+    <table class="inv-table"><thead><tr><th>Item</th><th>Expected</th><th>Actual Count</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+function submitReconTab(){
+  const inputs=document.querySelectorAll('#inv-body .inv-recon-input');
+  const counts=[];
+  inputs.forEach(inp=>{
+    const val=inp.value.trim();
+    if(val==='') return;
+    const actualQty=parseFloat(val);
+    if(isNaN(actualQty)||actualQty<0) return;
+    const item=inventoryItems.find(i=>i.id===inp.dataset.item);
+    if(!item) return;
+    const expectedQty=stockLevels[item.id]||0;
+    counts.push({itemId:item.id,itemName:item.name,unit:item.unit,expectedQty,actualQty,variance:Math.round((actualQty-expectedQty)*100)/100});
+  });
+  if(!counts.length){showToast('⚠️','Enter at least one count');return;}
+  submitReconciliationEntries(counts);
+  const mismatches=counts.filter(c=>c.variance!==0);
+  showToast(mismatches.length?'⚠️':'✅', mismatches.length?mismatches.length+' item(s) with variance':'All counts tally');
+  renderInvBody();
+}
+
+function renderItemsTab(){
+  const items=sortedInventoryItems(inventoryItems.filter(i=>invShowArchived?true:i.active!==false));
+  const rows=items.map(it=>{
+    const core=it.skuId!=null;
+    return `<div class="inv-item-row-edit">
+      <span class="inv-badge${core?' core':''}">${core?'PUFF':'ITEM'}</span>
+      <input class="inv-input" style="flex:2" value="${(it.name||'').replace(/"/g,'&quot;')}" ${core?'disabled':''} onchange="updateInventoryItem('${it.id}',{name:this.value})">
+      <input class="inv-input" style="flex:1;max-width:90px" value="${it.unit}" onchange="updateInventoryItem('${it.id}',{unit:this.value})">
+      ${core?'':`<input class="inv-input" style="flex:1;max-width:110px" type="number" min="0" step="1" value="${it.perPuffQty||0}" title="Qty consumed per puff sold (any flavor)" onchange="updateInventoryItem('${it.id}',{perPuffQty:parseFloat(this.value)||0})">`}
+      <span class="inv-archive-btn" onclick="updateInventoryItem('${it.id}',{active:${it.active===false}})">${it.active===false?'Restore':'Archive'}</span>
+    </div>`;
+  }).join('');
+  return `<div class="modal-sub">Core puff items (from SKUs) auto-deduct on sale. Custom items can optionally auto-deduct a fixed qty per puff sold — leave at 0 to track manually only.</div>
+    ${rows||'<div class="inv-empty">No items.</div>'}
+    <div class="inv-form-row" style="margin-top:14px">
+      <input class="inv-input" id="inv-new-name" placeholder="New item name" style="flex:2">
+      <input class="inv-input" id="inv-new-unit" placeholder="Unit (pcs, packet...)" style="flex:1;max-width:120px">
+    </div>
+    <div style="text-align:center;margin-top:10px"><span class="inv-archive-btn" onclick="invShowArchived=!invShowArchived;renderInvBody()">${invShowArchived?'Hide archived':'Show archived'}</span></div>`;
+}
+function submitNewItem(){
+  const name=document.getElementById('inv-new-name').value.trim();
+  const unit=document.getElementById('inv-new-unit').value.trim()||'pcs';
+  if(!name){showToast('⚠️','Enter an item name');return;}
+  addInventoryItem(name,unit,0).then(()=>{
+    showToast('✅','Added item: '+name);
+    document.getElementById('inv-new-name').value='';
+    document.getElementById('inv-new-unit').value='';
+  }).catch(()=>{
+    showToast('⚠️','Could not add item — check connection/permissions');
+  });
 }
 
 // ============ SKU GRID ============
@@ -1164,6 +1563,7 @@ function endTransaction(payments,sundry){
   lastReceipt=txn;
   saveToSession(txn);
   saveToCloud(txn);
+  applyInventoryForSale(cart);
   closePayment();
   clearCart();
   updateTopbarStats();
@@ -1372,6 +1772,32 @@ window.addEventListener('online', async function(){
   localStorage.setItem('wtp_txns',JSON.stringify(failed));
   setSyncStatus(failed.length?'':'synced');
   showToast(failed.length?'⚠️':'✅', failed.length?failed.length+' transaction(s) still pending':'All transactions synced');
+});
+
+window.addEventListener('online', async function(){
+  const adjQueue=JSON.parse(localStorage.getItem('wtp_stock_adj')||'[]');
+  const failedAdj=[];
+  for(const a of adjQueue){
+    try{
+      if(!window._fbReady) throw new Error('not ready');
+      await window._setDoc(window._doc(window._db,'inventoryStock',stockDocId(a.outlet,a.itemId)),{
+        outlet:a.outlet, itemId:a.itemId, qty:window._increment(a.delta), updatedAt:window._serverTimestamp()
+      },{merge:true});
+    } catch(e){ failedAdj.push(a); }
+  }
+  localStorage.setItem('wtp_stock_adj',JSON.stringify(failedAdj));
+
+  const setQueue=JSON.parse(localStorage.getItem('wtp_stock_set')||'[]');
+  const failedSet=[];
+  for(const s of setQueue){
+    try{
+      if(!window._fbReady) throw new Error('not ready');
+      await window._setDoc(window._doc(window._db,'inventoryStock',stockDocId(s.outlet,s.itemId)),{
+        outlet:s.outlet, itemId:s.itemId, qty:s.qty, updatedAt:window._serverTimestamp()
+      },{merge:true});
+    } catch(e){ failedSet.push(s); }
+  }
+  localStorage.setItem('wtp_stock_set',JSON.stringify(failedSet));
 });
 </script>
 </body>

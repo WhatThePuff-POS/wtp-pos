@@ -26,6 +26,66 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    match /inventoryItems/{itemId} {
+      // Catalog of trackable items (puffs + custom items like packaging, boxes, filling, dough balls)
+      allow read: if true;
+
+      allow create: if request.resource.data.keys().hasAll(['name', 'unit', 'active'])
+                   && request.resource.data.name is string
+                   && request.resource.data.unit is string;
+
+      // Editing an item: rename, change unit, adjust per-sale consumption, or archive/restore
+      allow update: if request.resource.data.diff(resource.data).affectedKeys()
+                        .hasOnly(['name', 'unit', 'perPuffQty', 'active']);
+
+      allow delete: if false;
+    }
+
+    match /inventoryStock/{stockId} {
+      // Current on-hand qty per outlet+item. Written via increment (sales/stock-in/wastage) or set (reconciliation)
+      allow read: if true;
+
+      allow write: if request.resource.data.keys().hasAll(['outlet', 'itemId', 'qty'])
+                  && request.resource.data.outlet in ['Bedok 216', 'Haig Road', 'Punggol Coast']
+                  && request.resource.data.qty is number;
+
+      allow delete: if false;
+    }
+
+    match /stockEntries/{entryId} {
+      // Append-only log of stock arriving
+      allow read: if true;
+
+      allow create: if request.resource.data.keys().hasAll(['outlet', 'itemId', 'itemName', 'qty', 'timestamp'])
+                   && request.resource.data.outlet in ['Bedok 216', 'Haig Road', 'Punggol Coast']
+                   && request.resource.data.qty is number
+                   && request.resource.data.qty > 0;
+
+      allow update, delete: if false;
+    }
+
+    match /wastageEntries/{entryId} {
+      // Append-only log of wastage
+      allow read: if true;
+
+      allow create: if request.resource.data.keys().hasAll(['outlet', 'itemId', 'itemName', 'qty', 'timestamp'])
+                   && request.resource.data.outlet in ['Bedok 216', 'Haig Road', 'Punggol Coast']
+                   && request.resource.data.qty is number
+                   && request.resource.data.qty > 0;
+
+      allow update, delete: if false;
+    }
+
+    match /reconciliations/{reconId} {
+      // Append-only log of end-of-day physical counts
+      allow read: if true;
+
+      allow create: if request.resource.data.keys().hasAll(['outlet', 'date', 'counts', 'timestamp'])
+                   && request.resource.data.outlet in ['Bedok 216', 'Haig Road', 'Punggol Coast'];
+
+      allow update, delete: if false;
+    }
+
     // Block all other collections
     match /{document=**} {
       allow read, write: if false;

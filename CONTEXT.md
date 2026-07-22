@@ -29,6 +29,28 @@ Admin PIN: 9999
 ## Payment Methods
 Cash, PayNow, CDC, Voucher (CDC/Voucher support split payments)
 
+## Inventory Tracking
+Accessible via the "📦 Stock" button in the POS topbar (no admin PIN required — staff-level access).
+
+- **Catalog** (`inventoryItems` collection): editable list of trackable items. Seeded on first run with
+  the 6 puffs (linked to their SKU, auto-deduct 1:1 per sale) plus Packaging, Boxes, Filling, Dough Balls
+  (unit customizable per item — pcs/packet/bundle/etc). New items can be added anytime from the Items tab.
+  Any custom item can optionally set "qty consumed per puff sold" (applies uniformly across all 6 flavors)
+  to auto-deduct on every sale; default 0 means manual tracking only (stock-in/wastage/reconciliation).
+- **Current stock** (`inventoryStock` collection): one doc per outlet+item, updated via Firestore `increment()`
+  so concurrent writes (sales, stock-in, wastage) don't clobber each other. Offline-safe — failed writes queue
+  in localStorage (`wtp_stock_adj` / `wtp_stock_set`) and replay on reconnect, same pattern as offline transactions.
+- **Stock In tab**: log new deliveries arriving (qty + optional note) → `stockEntries` log + stock increment.
+- **Wastage tab**: log spoiled/dropped/burnt items (qty + reason) → `wastageEntries` log + stock decrement.
+- **Reconcile tab**: separate end-of-day screen (not tied to Z-Report) — staff counts actual stock per item,
+  variance vs. expected is computed and logged to `reconciliations`, then stock is corrected to the counted value.
+- **Dashboard**: shows live "Puffs Remaining by Outlet" stat cards plus a full per-outlet inventory table
+  with low-stock highlighting (≤5 units in red).
+
+**Requires deployment:** `firestore.rules` was updated locally to allow these new collections but has not
+been deployed to Firebase yet — the feature will silently no-op (permission-denied) until rules are pushed
+via `firebase deploy --only firestore:rules` or the Firebase console.
+
 ## Known Outstanding Items
 - Otah photo missing (using Original as placeholder)
 - Printer integration pending (ESC/POS, model TBC)

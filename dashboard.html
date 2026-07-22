@@ -11,7 +11,7 @@
 <link rel="manifest" href="manifest.json">
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-  import { getFirestore, collection, query, orderBy, where, onSnapshot, doc, updateDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+  import { getFirestore, collection, query, orderBy, where, limit, onSnapshot, doc, updateDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
   const cfg = {
     apiKey:"AIzaSyAPCeTkc3cTqRNIDRhKQcpjrsUcckIUg68",
@@ -188,6 +188,92 @@
     });
   }
   startListener(true);
+
+  // ---- Inventory panel ----
+  let inventoryCatalog = [];
+  let inventoryStockAll = [];
+  const INV_OUTLETS = ['Bedok 216', 'Haig Road', 'Punggol Coast'];
+
+  function renderInventoryPanel() {
+    const items = inventoryCatalog.filter(i => i.active !== false).sort((a, b) => {
+      if ((a.skuId != null) !== (b.skuId != null)) return a.skuId != null ? -1 : 1;
+      if (a.skuId != null) return a.skuId - b.skuId;
+      return a.name.localeCompare(b.name);
+    });
+    const stockMap = {};
+    inventoryStockAll.forEach(s => {
+      if (!stockMap[s.itemId]) stockMap[s.itemId] = {};
+      stockMap[s.itemId][s.outlet] = s.qty || 0;
+    });
+
+    const puffItemIds = new Set(items.filter(i => i.skuId != null).map(i => i.id));
+    document.getElementById('puff-stat-cards').innerHTML = INV_OUTLETS.map(o => {
+      let total = 0;
+      inventoryStockAll.forEach(s => { if (s.outlet === o && puffItemIds.has(s.itemId)) total += (s.qty || 0); });
+      const cls = total <= 10 ? 'red' : total <= 30 ? 'amber' : 'green';
+      return `<div class="stat-card"><div class="stat-label">${o}</div><div class="stat-value ${cls}">${total} puffs</div></div>`;
+    }).join('');
+
+    document.getElementById('inv-dash-table').innerHTML = items.map(it => {
+      const cells = INV_OUTLETS.map(o => {
+        const qty = (stockMap[it.id] || {})[o] || 0;
+        const low = qty <= 5;
+        return `<td class="td-num${low ? ' td-low' : ''}">${qty}</td>`;
+      }).join('');
+      const total = INV_OUTLETS.reduce((s, o) => s + ((stockMap[it.id] || {})[o] || 0), 0);
+      return `<tr><td>${it.name}</td><td class="td-num">${it.unit}</td>${cells}<td class="td-num" style="font-weight:700">${total}</td></tr>`;
+    }).join('') || '<tr><td colspan="6" class="td-empty">No inventory items yet</td></tr>';
+  }
+
+  onSnapshot(collection(db, 'inventoryItems'), snap => {
+    inventoryCatalog = [];
+    snap.forEach(d => inventoryCatalog.push({ id: d.id, ...d.data() }));
+    renderInventoryPanel();
+  }, () => {});
+  onSnapshot(collection(db, 'inventoryStock'), snap => {
+    inventoryStockAll = [];
+    snap.forEach(d => inventoryStockAll.push(d.data()));
+    renderInventoryPanel();
+  }, () => {});
+
+  // ---- Wastage log ----
+  function renderWastageLog(entries) {
+    document.getElementById('wastage-log').innerHTML = entries.map(e => `
+      <tr>
+        <td class="td-dt">${(e.timestamp || '').replace('T', ' ').slice(0, 16)}</td>
+        <td>${e.outlet || '—'}</td>
+        <td>${e.itemName || '—'}</td>
+        <td class="td-num">${e.qty} ${e.unit || ''}</td>
+        <td>${e.reason || '—'}</td>
+        <td>${e.note || ''}</td>
+      </tr>`).join('') || '<tr><td colspan="6" class="td-empty">No wastage logged yet</td></tr>';
+  }
+  onSnapshot(query(collection(db, 'wastageEntries'), orderBy('timestamp', 'desc'), limit(30)), snap => {
+    const entries = [];
+    snap.forEach(d => entries.push(d.data()));
+    renderWastageLog(entries);
+  }, () => { document.getElementById('wastage-log').innerHTML = '<tr><td colspan="6" class="td-empty">No wastage logged yet</td></tr>'; });
+
+  // ---- Reconciliation history ----
+  function renderReconLog(rows) {
+    document.getElementById('recon-log').innerHTML = rows.map(r => `
+      <tr>
+        <td class="td-dt">${r.date || ''}</td>
+        <td>${r.outlet || '—'}</td>
+        <td>${r.itemName || '—'}</td>
+        <td class="td-num">${r.expectedQty}</td>
+        <td class="td-num">${r.actualQty}</td>
+        <td class="td-num${r.variance ? (r.variance < 0 ? ' td-low' : '') : ''}" style="${r.variance > 0 ? 'color:var(--amber);font-weight:700' : ''}">${r.variance > 0 ? '+' : ''}${r.variance}</td>
+      </tr>`).join('') || '<tr><td colspan="6" class="td-empty">No reconciliations logged yet</td></tr>';
+  }
+  onSnapshot(query(collection(db, 'reconciliations'), orderBy('timestamp', 'desc'), limit(10)), snap => {
+    const rows = [];
+    snap.forEach(d => {
+      const data = d.data();
+      (data.counts || []).forEach(c => rows.push({ outlet: data.outlet, date: data.date, ...c }));
+    });
+    renderReconLog(rows);
+  }, () => { document.getElementById('recon-log').innerHTML = '<tr><td colspan="6" class="td-empty">No reconciliations logged yet</td></tr>'; });
 </script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -261,6 +347,10 @@ tr:last-child td{border-bottom:none}
 .td-items{max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .td-total{font-family:monospace;font-weight:700;color:var(--amber)}
 .td-empty{text-align:center;color:var(--text3);padding:24px}
+.td-num{font-family:monospace;text-align:right}
+.td-low{color:var(--red);font-weight:700}
+.puff-stat-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+@media(max-width:600px){.puff-stat-grid{grid-template-columns:1fr}}
 .void-btn{padding:4px 10px;border-radius:4px;border:1px solid var(--red);background:transparent;color:var(--red);font-size:11px;cursor:pointer;transition:all 0.1s}
 .void-btn:hover{background:var(--red);color:#fff}
 
@@ -375,6 +465,56 @@ tr:last-child td{border-bottom:none}
     <div class="breakdown-card"><div class="sec-title">Revenue by Outlet</div><div id="outlet-breakdown"></div></div>
     <div class="breakdown-card"><div class="sec-title">Sales by SKU</div><div id="sku-breakdown"></div></div>
     <div class="breakdown-card"><div class="sec-title">Payment Methods</div><div id="pay-breakdown"></div></div>
+  </div>
+
+  <!-- Inventory -->
+  <div class="hourly-card">
+    <div class="sec-title">🥟 Puffs Remaining by Outlet</div>
+    <div class="puff-stat-grid" id="puff-stat-cards"></div>
+  </div>
+
+  <div class="table-card">
+    <div class="sec-title" style="margin-bottom:14px">Inventory by Outlet <span style="font-size:10px;font-weight:400;text-transform:none;color:var(--text3)">(live stock on hand)</span></div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Item</th><th>Unit</th><th>Bedok 216</th><th>Haig Road</th><th>Punggol Coast</th><th>Total</th></tr>
+        </thead>
+        <tbody id="inv-dash-table">
+          <tr><td colspan="6" class="td-empty">Connecting to Firebase…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Wastage log -->
+  <div class="table-card">
+    <div class="sec-title" style="margin-bottom:14px">Wastage Log — Latest 30</div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Date / Time</th><th>Outlet</th><th>Item</th><th>Qty</th><th>Reason</th><th>Details</th></tr>
+        </thead>
+        <tbody id="wastage-log">
+          <tr><td colspan="6" class="td-empty">Connecting to Firebase…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Reconciliation history -->
+  <div class="table-card">
+    <div class="sec-title" style="margin-bottom:14px">Reconciliation History — Latest 10 counts</div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Date</th><th>Outlet</th><th>Item</th><th>Expected</th><th>Actual</th><th>Variance</th></tr>
+        </thead>
+        <tbody id="recon-log">
+          <tr><td colspan="6" class="td-empty">Connecting to Firebase…</td></tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 
   <!-- Transaction log -->
