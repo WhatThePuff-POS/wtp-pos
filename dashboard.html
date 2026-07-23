@@ -189,58 +189,57 @@
   }
   startListener(true);
 
-  // ---- Inventory panel ----
-  let inventoryCatalog = [];
-  let inventoryStockAll = [];
+  // ---- End of Day Stock (the last physical count per outlet — not a live running number) ----
   const INV_OUTLETS = ['Bedok 216', 'Haig Road', 'Punggol Coast'];
+  let reconciliationDocs = []; // newest first
 
-  function renderInventoryPanel() {
-    const items = inventoryCatalog.filter(i => i.active !== false).sort((a, b) => {
-      if ((a.skuId != null) !== (b.skuId != null)) return a.skuId != null ? -1 : 1;
-      if (a.skuId != null) return a.skuId - b.skuId;
-      return a.name.localeCompare(b.name);
-    });
-    const stockMap = {};
-    inventoryStockAll.forEach(s => {
-      if (!stockMap[s.itemId]) stockMap[s.itemId] = {};
-      stockMap[s.itemId][s.outlet] = s.qty || 0;
-    });
-
-    const puffItemIds = new Set(items.filter(i => i.skuId != null).map(i => i.id));
-    document.getElementById('puff-stat-cards').innerHTML = INV_OUTLETS.map(o => {
-      let total = 0;
-      inventoryStockAll.forEach(s => { if (s.outlet === o && puffItemIds.has(s.itemId)) total += (s.qty || 0); });
-      const cls = total <= 10 ? 'red' : total <= 30 ? 'amber' : 'green';
-      return `<div class="stat-card"><div class="stat-label">${o}</div><div class="stat-value ${cls}">${total} puffs</div></div>`;
-    }).join('');
-
-    document.getElementById('inv-dash-table').innerHTML = items.map(it => {
-      const cells = INV_OUTLETS.map(o => {
-        const qty = (stockMap[it.id] || {})[o] || 0;
-        const low = qty <= 5;
-        return `<td class="td-num${low ? ' td-low' : ''}">${qty}</td>`;
-      }).join('');
-      const total = INV_OUTLETS.reduce((s, o) => s + ((stockMap[it.id] || {})[o] || 0), 0);
-      return `<tr><td>${it.name}</td><td class="td-num">${it.unit}</td>${cells}<td class="td-num" style="font-weight:700">${total}</td></tr>`;
-    }).join('') || '<tr><td colspan="6" class="td-empty">No inventory items yet</td></tr>';
+  // Stored timestamps are UTC ISO strings (new Date().toISOString()) — always render them
+  // back in Singapore local time, regardless of the viewing device's own timezone/clock.
+  function fmtSGDateTime(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d)) return iso;
+    return d.toLocaleString('en-SG', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Singapore' });
   }
 
-  onSnapshot(collection(db, 'inventoryItems'), snap => {
-    inventoryCatalog = [];
-    snap.forEach(d => inventoryCatalog.push({ id: d.id, ...d.data() }));
-    renderInventoryPanel();
-  }, () => {});
-  onSnapshot(collection(db, 'inventoryStock'), snap => {
-    inventoryStockAll = [];
-    snap.forEach(d => inventoryStockAll.push(d.data()));
-    renderInventoryPanel();
-  }, () => {});
+  function renderEndOfDayStock() {
+    document.getElementById('eod-stock').innerHTML = INV_OUTLETS.map(o => {
+      const latest = reconciliationDocs.find(r => r.outlet === o);
+      if (!latest) {
+        return `<div class="eod-card"><div class="eod-outlet">${o}</div><div class="td-empty" style="padding:16px 0">Not reconciled yet</div></div>`;
+      }
+      const dt = fmtSGDateTime(latest.timestamp);
+      const rows = (latest.counts || []).map(c =>
+        `<tr><td>${c.itemName}</td><td class="td-num">${c.actualQty} ${c.unit || ''}</td></tr>`
+      ).join('') || '<tr><td colspan="2" class="td-empty">No items counted</td></tr>';
+      return `<div class="eod-card">
+        <div class="eod-outlet">${o}</div>
+        <div class="eod-asof">as of ${dt}</div>
+        <table class="eod-table"><tbody>${rows}</tbody></table>
+      </div>`;
+    }).join('');
+  }
+
+  onSnapshot(query(collection(db, 'reconciliations'), orderBy('timestamp', 'desc'), limit(30)), snap => {
+    reconciliationDocs = [];
+    snap.forEach(d => reconciliationDocs.push(d.data()));
+    renderEndOfDayStock();
+    const flatRows = [];
+    reconciliationDocs.slice(0, 10).forEach(data => {
+      (data.counts || []).forEach(c => flatRows.push({ outlet: data.outlet, date: data.date, ...c }));
+    });
+    renderReconLog(flatRows);
+  }, () => {
+    document.getElementById('eod-stock').innerHTML = INV_OUTLETS.map(o =>
+      `<div class="eod-card"><div class="eod-outlet">${o}</div><div class="td-empty" style="padding:16px 0">Not reconciled yet</div></div>`).join('');
+    renderReconLog([]);
+  });
 
   // ---- Wastage log ----
   function renderWastageLog(entries) {
     document.getElementById('wastage-log').innerHTML = entries.map(e => `
       <tr>
-        <td class="td-dt">${(e.timestamp || '').replace('T', ' ').slice(0, 16)}</td>
+        <td class="td-dt">${fmtSGDateTime(e.timestamp)}</td>
         <td>${e.outlet || '—'}</td>
         <td>${e.itemName || '—'}</td>
         <td class="td-num">${e.qty} ${e.unit || ''}</td>
@@ -266,14 +265,6 @@
         <td class="td-num${r.variance ? (r.variance < 0 ? ' td-low' : '') : ''}" style="${r.variance > 0 ? 'color:var(--amber);font-weight:700' : ''}">${r.variance > 0 ? '+' : ''}${r.variance}</td>
       </tr>`).join('') || '<tr><td colspan="6" class="td-empty">No reconciliations logged yet</td></tr>';
   }
-  onSnapshot(query(collection(db, 'reconciliations'), orderBy('timestamp', 'desc'), limit(10)), snap => {
-    const rows = [];
-    snap.forEach(d => {
-      const data = d.data();
-      (data.counts || []).forEach(c => rows.push({ outlet: data.outlet, date: data.date, ...c }));
-    });
-    renderReconLog(rows);
-  }, () => { document.getElementById('recon-log').innerHTML = '<tr><td colspan="6" class="td-empty">No reconciliations logged yet</td></tr>'; });
 </script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -349,8 +340,16 @@ tr:last-child td{border-bottom:none}
 .td-empty{text-align:center;color:var(--text3);padding:24px}
 .td-num{font-family:monospace;text-align:right}
 .td-low{color:var(--red);font-weight:700}
-.puff-stat-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
-@media(max-width:600px){.puff-stat-grid{grid-template-columns:1fr}}
+.eod-sub{font-size:11px;color:var(--text3);margin-bottom:14px}
+.eod-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+@media(max-width:700px){.eod-grid{grid-template-columns:1fr}}
+.eod-card{background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px 16px}
+.eod-outlet{font-size:14px;font-weight:700;color:var(--text)}
+.eod-asof{font-size:10.5px;color:var(--text3);font-family:monospace;margin-bottom:8px}
+.eod-table{width:100%;border-collapse:collapse;font-size:12px}
+.eod-table td{padding:5px 0;border-bottom:1px solid var(--border);color:var(--text2)}
+.eod-table tr:last-child td{border-bottom:none}
+.eod-table .td-num{color:var(--text);font-family:monospace}
 .void-btn{padding:4px 10px;border-radius:4px;border:1px solid var(--red);background:transparent;color:var(--red);font-size:11px;cursor:pointer;transition:all 0.1s}
 .void-btn:hover{background:var(--red);color:#fff}
 
@@ -467,24 +466,11 @@ tr:last-child td{border-bottom:none}
     <div class="breakdown-card"><div class="sec-title">Payment Methods</div><div id="pay-breakdown"></div></div>
   </div>
 
-  <!-- Inventory -->
-  <div class="hourly-card">
-    <div class="sec-title">🥟 Puffs Remaining by Outlet</div>
-    <div class="puff-stat-grid" id="puff-stat-cards"></div>
-  </div>
-
+  <!-- End of Day Stock -->
   <div class="table-card">
-    <div class="sec-title" style="margin-bottom:14px">Inventory by Outlet <span style="font-size:10px;font-weight:400;text-transform:none;color:var(--text3)">(live stock on hand)</span></div>
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr><th>Item</th><th>Unit</th><th>Bedok 216</th><th>Haig Road</th><th>Punggol Coast</th><th>Total</th></tr>
-        </thead>
-        <tbody id="inv-dash-table">
-          <tr><td colspan="6" class="td-empty">Connecting to Firebase…</td></tr>
-        </tbody>
-      </table>
-    </div>
+    <div class="sec-title" style="margin-bottom:4px">🥟 End of Day Stock</div>
+    <div class="eod-sub">The last physical count logged per outlet — not a live running total. Check the Reconciliation History below for how it's tracked over time.</div>
+    <div class="eod-grid" id="eod-stock"></div>
   </div>
 
   <!-- Wastage log -->

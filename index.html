@@ -638,7 +638,6 @@ html,body{height:100%;background:#1a1a1a;font-family:'Segoe UI',system-ui,sans-s
     <div class="inv-tabs">
       <div class="inv-tab" data-tab="stockin" onclick="switchInvTab('stockin')">Stock In</div>
       <div class="inv-tab" data-tab="wastage" onclick="switchInvTab('wastage')">Wastage</div>
-      <div class="inv-tab" data-tab="stock" onclick="switchInvTab('stock')">Current Stock</div>
       <div class="inv-tab" data-tab="recon" onclick="switchInvTab('recon')">Reconcile</div>
       <div class="inv-tab" data-tab="items" onclick="switchInvTab('items')">Items</div>
     </div>
@@ -1116,7 +1115,6 @@ function renderInvBody(){
   const body=document.getElementById('inv-body');
   if(invActiveTab==='stockin') body.innerHTML=renderStockFormTab('in');
   else if(invActiveTab==='wastage') body.innerHTML=renderStockFormTab('waste');
-  else if(invActiveTab==='stock') body.innerHTML=renderStockTable();
   else if(invActiveTab==='recon') body.innerHTML=renderReconTab();
   else if(invActiveTab==='items') body.innerHTML=renderItemsTab();
   updateInvPrimaryButton();
@@ -1205,18 +1203,6 @@ function submitInvForm(mode){
   sessionInvLog=sessionInvLog.slice(0,20);
   invSelectedItemId=null;
   renderInvBody();
-}
-
-function renderStockTable(){
-  const items=sortedInventoryItems(inventoryItems.filter(i=>i.active!==false));
-  if(!items.length) return '<div class="inv-empty">No inventory items yet.</div>';
-  const rows=items.map(it=>{
-    const qty=stockLevels[it.id]||0;
-    const low=qty<=5;
-    return `<tr><td>${it.name}</td><td class="iv-num">${it.unit}</td><td class="iv-num${low?' iv-low':''}">${qty}</td></tr>`;
-  }).join('');
-  return `<table class="inv-table"><thead><tr><th>Item</th><th>Unit</th><th>On Hand</th></tr></thead><tbody>${rows}</tbody></table>
-    <div class="inv-empty" style="text-align:left;padding-top:10px">🔴 Red = 5 or fewer remaining</div>`;
 }
 
 function renderReconTab(){

@@ -37,15 +37,19 @@ Accessible via the "📦 Stock" button in the POS topbar (no admin PIN required 
   (unit customizable per item — pcs/packet/bundle/etc). New items can be added anytime from the Items tab.
   Any custom item can optionally set "qty consumed per puff sold" (applies uniformly across all 6 flavors)
   to auto-deduct on every sale; default 0 means manual tracking only (stock-in/wastage/reconciliation).
-- **Current stock** (`inventoryStock` collection): one doc per outlet+item, updated via Firestore `increment()`
+- **Running count** (`inventoryStock` collection): one doc per outlet+item, updated via Firestore `increment()`
   so concurrent writes (sales, stock-in, wastage) don't clobber each other. Offline-safe — failed writes queue
   in localStorage (`wtp_stock_adj` / `wtp_stock_set`) and replay on reconnect, same pattern as offline transactions.
+  **This number is intentionally not surfaced anywhere as a "current stock" screen** — there's no staff-facing
+  tab for it. It exists solely to give Reconcile an "Expected" baseline to compare a physical count against.
+  The only place it's shown is a rough qty hint next to each item in the Stock In / Wastage pickers.
 - **Stock In tab**: log new deliveries arriving (qty + optional note) → `stockEntries` log + stock increment.
-- **Wastage tab**: log spoiled/dropped/burnt items (qty + reason) → `wastageEntries` log + stock decrement.
+- **Wastage tab**: log spoiled/dropped/burnt items (qty + reason + optional details) → `wastageEntries` log + stock decrement.
 - **Reconcile tab**: separate end-of-day screen (not tied to Z-Report) — staff counts actual stock per item,
   variance vs. expected is computed and logged to `reconciliations`, then stock is corrected to the counted value.
-- **Dashboard**: shows live "Puffs Remaining by Outlet" stat cards plus a full per-outlet inventory table
-  with low-stock highlighting (≤5 units in red).
+  This physical count *is* the authoritative "end of day stock" — deliberately trusted over the live running count.
+- **Dashboard**: shows an "End of Day Stock" panel per outlet — the most recent reconciliation's actual counts,
+  labeled with when it was taken (not a live number), plus a Wastage Log and Reconciliation History (with variance).
 
 **Requires deployment:** `firestore.rules` was updated locally to allow these new collections but has not
 been deployed to Firebase yet — the feature will silently no-op (permission-denied) until rules are pushed
