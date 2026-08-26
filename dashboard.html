@@ -11,7 +11,7 @@
 <link rel="manifest" href="manifest.json">
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-  import { getFirestore, collection, query, orderBy, where, limit, onSnapshot, doc, updateDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+  import { getFirestore, collection, query, orderBy, where, limit, onSnapshot, doc, updateDoc, getDocs } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
   const cfg = {
     apiKey:"AIzaSyAPCeTkc3cTqRNIDRhKQcpjrsUcckIUg68",
@@ -25,6 +25,80 @@
   const db = getFirestore(app);
 
   let allTransactions = [];
+  const SKU_NAMES = ["Original","Sardine","Cheesy","Black Pepper","Char Siew","Otah"];
+  const INV_OUTLETS = ['Bedok 216', 'Haig Road', 'Punggol Coast'];
+
+  // Default the export range to the last 60 days (SGT calendar dates), editable by the user
+  (function initExportRange() {
+    const toSGDate = d => d.toLocaleDateString('en-CA', { timeZone: 'Asia/Singapore' }); // YYYY-MM-DD
+    const now = new Date();
+    document.getElementById('export-to').value = toSGDate(now);
+    document.getElementById('export-from').value = toSGDate(new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000));
+  })();
+
+  // Pivot CSV: one row per date+outlet, one column per SKU. Queried fresh for the chosen
+  // range via a one-off getDocs() (not the live 60-day listener) so any date range works.
+  window.exportSkuCsv = async function() {
+    const fromStr = document.getElementById('export-from').value;
+    const toStr = document.getElementById('export-to').value;
+    if (!fromStr || !toStr) { showToast('⚠️', 'Pick a From and To date first'); return; }
+    if (fromStr > toStr) { showToast('⚠️', '"From" date is after "To" date'); return; }
+
+    // Singapore has a fixed UTC+8 offset (no DST) — anchor the day boundaries explicitly
+    // so the range matches the SGT calendar dates shown everywhere else in the app,
+    // regardless of the viewing device's own timezone.
+    const fromISO = new Date(fromStr + 'T00:00:00+08:00').toISOString();
+    const toISO = new Date(toStr + 'T23:59:59.999+08:00').toISOString();
+
+    const btn = document.getElementById('export-btn');
+    const origLabel = btn.textContent;
+    btn.textContent = 'Exporting…';
+    btn.disabled = true;
+    try {
+      const q = query(collection(db, 'transactions'), where('timestamp', '>=', fromISO), where('timestamp', '<=', toISO));
+      const snap = await getDocs(q);
+      const txns = [];
+      snap.forEach(d => txns.push(d.data()));
+
+      const rows = {}; // key: date|||outlet -> { date, outlet, skuQty:{...}, other, revenue }
+      txns.filter(t => !t.voided).forEach(t => {
+        const key = t.date + '|||' + t.outlet;
+        if (!rows[key]) {
+          rows[key] = { date: t.date, outlet: t.outlet, skuQty: {}, other: 0, revenue: 0 };
+          SKU_NAMES.forEach(s => rows[key].skuQty[s] = 0);
+        }
+        (t.items || []).forEach(i => {
+          rows[key].revenue += (typeof i.sub === 'number' ? i.sub : i.qty * i.price);
+          if (SKU_NAMES.includes(i.name)) rows[key].skuQty[i.name] += i.qty;
+          else rows[key].other += i.qty;
+        });
+      });
+
+      const outletRank = o => { const idx = INV_OUTLETS.indexOf(o); return idx === -1 ? 99 : idx; };
+      const list = Object.values(rows).sort((a, b) =>
+        a.date === b.date ? outletRank(a.outlet) - outletRank(b.outlet) : new Date(a.date) - new Date(b.date));
+
+      const header = ['Date', 'Outlet', ...SKU_NAMES, 'Other', 'Total Revenue ($)'];
+      const csvLines = [header.join(',')];
+      list.forEach(r => csvLines.push([r.date, r.outlet, ...SKU_NAMES.map(s => r.skuQty[s]), r.other, r.revenue.toFixed(2)].join(',')));
+
+      const blob = new Blob([csvLines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'wtp-sku-sales-' + fromStr + '_to_' + toStr + '.csv';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast('✅', 'Exported ' + list.length + ' row(s)');
+    } catch (e) {
+      showToast('⚠️', 'Export failed: ' + e.message);
+    } finally {
+      btn.textContent = origLabel;
+      btn.disabled = false;
+    }
+  };
 
   window.voidTransaction = async function(firebaseId, txnId) {
     const pin = document.getElementById('void-pin-input').value.trim();
@@ -68,7 +142,6 @@
     const txnCount = txns.length;
     const avgOrder = txnCount > 0 ? netRev/txnCount : 0;
 
-    const SKU_NAMES = ["Original","Sardine","Cheesy","Black Pepper","Char Siew","Otah"];
     const skuQty = {}; SKU_NAMES.forEach(s=>skuQty[s]=0);
     const payTotals = {cash:0,paynow:0,cdc:0,voucher:0,sundry:0};
     let totalItems = 0;
@@ -190,7 +263,6 @@
   startListener(true);
 
   // ---- End of Day Stock (the last physical count per outlet — not a live running number) ----
-  const INV_OUTLETS = ['Bedok 216', 'Haig Road', 'Punggol Coast'];
   let reconciliationDocs = []; // newest first
 
   // Stored timestamps are UTC ISO strings (new Date().toISOString()) — always render them
@@ -288,6 +360,8 @@ html,body{background:#111;color:#f0ede8;font-family:'Segoe UI',system-ui,sans-se
 .filter-select:focus,.filter-input:focus{border-color:var(--amber)}
 .filter-btn{padding:7px 14px;background:var(--amber);color:#111;border:none;border-radius:var(--radius-sm);font-size:13px;font-weight:600;cursor:pointer}
 .filter-btn:hover{background:#f5c060}
+.filter-btn:disabled{background:var(--bg4);color:var(--text3);cursor:not-allowed}
+.filter-sep{width:1px;align-self:stretch;background:var(--border2);margin:0 2px}
 .last-updated{font-size:11px;color:var(--text3);margin-left:auto}
 .content{padding:20px 24px;max-width:1400px;margin:0 auto}
 .sec-title{font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:12px}
@@ -436,6 +510,12 @@ tr:last-child td{border-bottom:none}
   <span class="filter-label">Date:</span>
   <input class="filter-input" type="date" id="date-filter" onchange="refreshDashboard()">
   <button class="filter-btn" onclick="document.getElementById('date-filter').value='';refreshDashboard()">Today</button>
+  <span class="filter-sep"></span>
+  <span class="filter-label">Export:</span>
+  <input class="filter-input" type="date" id="export-from">
+  <span class="filter-label" style="margin:0 -2px">to</span>
+  <input class="filter-input" type="date" id="export-to">
+  <button class="filter-btn" id="export-btn" ontouchstart="event.preventDefault();exportSkuCsv()" onclick="exportSkuCsv()">⬇ Export CSV</button>
   <span class="last-updated" id="last-updated">Connecting…</span>
 </div>
 

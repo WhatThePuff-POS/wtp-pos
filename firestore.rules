@@ -86,6 +86,22 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    match /skus/{skuId} {
+      // Product catalog shown on the POS sale grid (name, price, photo)
+      allow read: if true;
+
+      allow create: if request.resource.data.keys().hasAll(['id', 'name', 'price', 'active'])
+                   && request.resource.data.name is string
+                   && request.resource.data.price is number
+                   && request.resource.data.price >= 0;
+
+      // Editing a product: rename, reprice, replace photo, reorder, or archive/restore
+      allow update: if request.resource.data.diff(resource.data).affectedKeys()
+                        .hasOnly(['name', 'price', 'img', 'order', 'active']);
+
+      allow delete: if false;
+    }
+
     // Block all other collections
     match /{document=**} {
       allow read, write: if false;
