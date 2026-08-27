@@ -1001,7 +1001,7 @@ async function ensureInventoryCatalog(){
   try{
     if(!window._fbReady) return;
     const snap=await window._getDocs(window._collection(window._db,'inventoryItems'));
-    if(!snap.empty) return;
+    const existingNames=new Set(snap.docs.map(d=>d.data().name));
     const defaults=[
       ...DEFAULT_SKUS.map(s=>({name:s.name,unit:'pcs',skuId:s.id,perPuffQty:0,active:true})),
       {name:'Packaging',unit:'pcs',skuId:null,perPuffQty:0,active:true},
@@ -1009,8 +1009,13 @@ async function ensureInventoryCatalog(){
       {name:'Filling',unit:'packet',skuId:null,perPuffQty:0,active:true},
       {name:'Dough Balls',unit:'pcs',skuId:null,perPuffQty:0,active:true}
     ];
+    // Per-item existence check (by name) plus a fixed doc ID per default, so a
+    // stale/offline read that misreads the catalog as empty re-runs this safely —
+    // it overwrites the same doc instead of creating a duplicate.
     for(const it of defaults){
-      await window._addDoc(window._collection(window._db,'inventoryItems'),{...it,createdAt:window._serverTimestamp()});
+      if(existingNames.has(it.name)) continue;
+      const slug=it.name.toLowerCase().replace(/[^a-z0-9]+/g,'-');
+      await window._setDoc(window._doc(window._db,'inventoryItems','default-'+slug),{...it,createdAt:window._serverTimestamp()});
     }
   }catch(e){ /* offline at boot — will retry next login */ }
 }
@@ -1038,10 +1043,14 @@ async function ensureSkuCatalog(){
   try{
     if(!window._fbReady) return;
     const snap=await window._getDocs(window._collection(window._db,'skus'));
-    if(!snap.empty) return;
+    // Per-default existence check (not just "collection empty") plus a fixed doc ID per
+    // default, so a stale/offline read that misreads the catalog as empty re-runs this
+    // safely — it overwrites the same doc instead of creating a duplicate.
+    const existingIds=new Set(snap.docs.map(d=>d.data().id));
     for(let i=0;i<DEFAULT_SKUS.length;i++){
       const s=DEFAULT_SKUS[i];
-      await window._addDoc(window._collection(window._db,'skus'),{
+      if(existingIds.has(s.id)) continue;
+      await window._setDoc(window._doc(window._db,'skus','default-'+s.id),{
         id:s.id,name:s.name,price:s.price,img:s.img,order:i,active:true,createdAt:window._serverTimestamp()
       });
     }
@@ -1421,7 +1430,8 @@ function submitNewItem(){
 
 // ============ SKU GRID ============
 function renderSKUs(){
-  document.getElementById('sku-area').innerHTML=SKUS.map(s=>{
+  const area=document.getElementById('sku-area');
+  area.innerHTML=SKUS.map(s=>{
     const qty=cart[s.id]?.qty||0;
     return `<div class="sku-btn${qty>0?' in-cart':''}" onclick="addToCart(${s.id})">
       ${qty>0?`<div class="sku-qty-badge">${qty}</div>`:''}
@@ -1435,6 +1445,12 @@ function renderSKUs(){
     <div class="sku-name">Others</div>
     <div class="sku-price">custom</div>
   </div>`;
+  // Grid is fixed at 4 columns, but the catalog's row count grows as products are
+  // added via self-serve product management — compute rows from the item count
+  // instead of hardcoding 2, or extra rows get squeezed into slivers by the grid.
+  const cols=4;
+  const rows=Math.ceil((SKUS.length+1)/cols);
+  area.style.gridTemplateRows=`repeat(${rows},1fr)`;
 }
 
 // ============ CUSTOM ITEM ============
