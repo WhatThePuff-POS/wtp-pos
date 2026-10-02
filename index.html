@@ -546,6 +546,7 @@ html,body{height:100%;background:#1a1a1a;font-family:'Segoe UI',system-ui,sans-s
       <div class="sync-dot" id="sync-dot"></div>
       <span class="topbar-time" id="clock"></span>
       <div class="nav-btns">
+        <button class="nav-btn" onclick="openPrinterSettings()">🖨 Printer</button>
         <button class="nav-btn" onclick="manualOpenDrawer()">💰 Drawer</button>
         <button class="nav-btn" onclick="openInventoryModal()">📦 Stock</button>
         <button class="nav-btn" onclick="requireAdmin('Manage Products','Enter admin PIN to add or edit products',openProductModal,'callback')">🧁 Products</button>
@@ -683,7 +684,7 @@ html,body{height:100%;background:#1a1a1a;font-family:'Segoe UI',system-ui,sans-s
 <div class="terminal-closed" id="terminal-closed">
   <div style="font-size:56px;opacity:0.3">🔒</div>
   <div style="font-size:22px;font-weight:500;color:var(--text2)">Terminal Closed</div>
-  <div style="font-size:13px;color:var(--text3)">Z-Report printed. Have a good rest!</div>
+  <div style="font-size:13px;color:var(--text3)">Terminal closed. Check your Z-Report printout before starting a new day.</div>
   <button class="tc-reopen" onclick="reopenTerminal()">Open New Day</button>
 </div>
 
@@ -1800,15 +1801,71 @@ function buildReceiptHTML(txn){
       <div class="rp-ref">${txn.id} &nbsp;·&nbsp; ${txn.date}</div>
     </div>`;
 }
-function printReceipt(txn){
-  document.getElementById('receipt-print').innerHTML=buildReceiptHTML(txn);
-  const img=document.querySelector('#receipt-print .rp-logo');
-  if(img && !img.complete){
-    img.onload=()=>window.print();
-    img.onerror=()=>window.print();
-  } else {
+// RawBT receives ESC/POS bytes through its documented rawbt:base64 URI.
+// Handoff has no printer acknowledgement: never claim a completed print.
+function printerConfig(){
+  try{return JSON.parse(localStorage.getItem('wtp_printer')||'null')||{mode:'browser',width:32};}
+  catch(e){return {mode:'browser',width:32};}
+}
+function openPrinterSettings(){
+  let dlg=document.getElementById('printer-settings');
+  if(!dlg){
+    dlg=document.createElement('dialog');dlg.id='printer-settings';
+    dlg.style.cssText='max-width:420px;width:90%;padding:24px;border-radius:12px;background:#202020;color:white;border:1px solid #777';
+    dlg.innerHTML=`<h2>Printer setup</h2><p>For Android Bluetooth printing, install RawBT, select your paired Xprinter in RawBT and run its test print first.</p>
+      <p><label>Print method <select id="printer-mode"><option value="browser">Browser print dialog</option><option value="rawbt">Android Bluetooth (RawBT)</option></select></label></p>
+      <p><label>Paper width <select id="printer-width"><option value="32">58 mm / 32 columns</option><option value="48">80 mm / 48 columns</option></select></label></p>
+      <p>RawBT prints text receipts. Android may ask to open the app. This page cannot confirm whether paper was printed.</p>
+      <button onclick="savePrinterSettings()">Save</button> <button onclick="testPrinter()">Save &amp; test</button> <button onclick="document.getElementById('printer-settings').close()">Close</button>`;
+    document.body.appendChild(dlg);
+  }
+  const c=printerConfig();document.getElementById('printer-mode').value=c.mode;document.getElementById('printer-width').value=String(c.width);dlg.showModal();
+}
+function savePrinterSettings(){
+  localStorage.setItem('wtp_printer',JSON.stringify({mode:document.getElementById('printer-mode').value,width:Number(document.getElementById('printer-width').value)}));
+  document.getElementById('printer-settings').close();
+}
+function testPrinter(){savePrinterSettings();sendPrintText('WHAT THE PUFF!\nPRINTER TEST\n'+new Date().toLocaleString('en-SG')+'\n0123456789\nPrint connection test');}
+function printLine(label,value,width){
+  label=String(label);value=String(value);
+  return label.length+value.length+1>width ? label+'\n'+value.padStart(width) : label+' '.repeat(width-label.length-value.length)+value;
+}
+function buildReceiptText(txn){
+  const w=printerConfig().width,rule='-'.repeat(w),row=(a,b)=>printLine(a,b,w);
+  return ['WHAT THE PUFF!',txn.outlet,txn.date+' '+txn.time,'Receipt: '+txn.id,rule,
+    ...(txn.items||[]).map(i=>row(i.qty+'x '+i.name,fmt(i.sub))),rule,
+    row('Subtotal',fmt(txn.subtotal)),...(txn.discount>0?[row('Senior Disc (10%)','-'+fmt(txn.discount))]:[]),
+    row('TOTAL',fmt(txn.total)),rule,...(txn.payments||[]).map(p=>row(p.type.toUpperCase(),fmt(p.amount))),rule,
+    'Thank you for your support!','See you again soon'].join('\n');
+}
+function sendPrintText(text){
+  const config=printerConfig();
+  if(config.mode==='rawbt'){
+    if(!/Android/i.test(navigator.userAgent)){showToast('⚠️','RawBT requires Android. Change Printer settings.');return false;}
+    // Conservative ASCII encoding avoids printer-dependent UTF-8/code-page corruption.
+    const ascii=text.normalize('NFKD').replace(/[^\x20-\x7E\n]/g,'?');
+    const bytes='\x1b@'+ascii+'\n\n\n';
+    window.location.href='rawbt:base64,'+btoa(bytes);
+    showToast('🖨️','Opening RawBT — check the printer before retrying');
+  }else{
+    const target=document.getElementById('receipt-print');
+    target.replaceChildren();const pre=document.createElement('pre');pre.textContent=text;
+    pre.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere;font-family:monospace;font-size:9pt;margin:0';target.appendChild(pre);
+    target.style.width=config.width===48?'76mm':'54mm';target.style.padding='3mm';
     window.print();
   }
+  return true;
+}
+function printReceipt(txn){
+  if(!txn){showToast('⚠️','No receipt to print');return false;}
+  if(printerConfig().mode==='rawbt')return sendPrintText(buildReceiptText(txn));
+  document.getElementById('receipt-print').innerHTML=buildReceiptHTML(txn);
+  const target=document.getElementById('receipt-print');
+  target.style.width=printerConfig().width===48?'76mm':'54mm';target.style.padding='3mm';
+  const img=document.querySelector('#receipt-print .rp-logo');
+  if(img && !img.complete){img.onload=()=>window.print();img.onerror=()=>window.print();}
+  else window.print();
+  return true;
 }
 
 // ============ REPRINT ============
@@ -1858,12 +1915,25 @@ function confirmZReport(){
 function closeReport(isZ){
   document.getElementById('report-modal').classList.remove('open');
   if(isZ){
-    showToast('🖨️','Z-Report sent to printer');
+    showToast('ℹ️','Terminal closed');
     setTimeout(()=>document.getElementById('terminal-closed').classList.add('open'),400);
   }
 }
-function printReport(type){showToast('🖨️',type+'-Report sent to printer');}
+let reportPrintSnapshot=null;
+function printReport(type){
+  if(!reportPrintSnapshot||reportPrintSnapshot.type!==type){showToast('⚠️','Open the report again before printing');return false;}
+  return sendPrintText(reportPrintSnapshot.text);
+}
+function buildReportText(type,now,d){
+  const w=printerConfig().width,row=(a,b)=>printLine(a,b,w),rule='-'.repeat(w);
+  return ['WHAT THE PUFF!',type+'-REPORT',d.outlet,now.toLocaleString('en-SG'),rule,'REVENUE SUMMARY',
+    row('Transactions',d.txnCount),row('Gross Revenue',fmt(d.grossRev)),row('Senior Discounts','-'+fmt(d.discountTotal)),row('Net Revenue',fmt(d.netRev)),rule,'SALES BY SKU (before discounts)',
+    ...SKUS.map(s=>row(s.name,(d.skuQty[s.name]||0)+' pcs '+fmt((d.skuQty[s.name]||0)*s.price))),rule,'PAYMENT TYPES',
+    ...Object.keys(d.payTotals).map(p=>row(p,fmt(d.payTotals[p]||0)+' ('+(d.payCount[p]||0)+')')),rule,'HOURLY SALES',
+    ...Object.keys(d.hourlyRev).sort((a,b)=>Number(a)-Number(b)).map(h=>row(String(h).padStart(2,'0')+':00',fmt(d.hourlyRev[h])+' ('+(d.hourlyCount[h]||0)+')')),rule,'END OF '+type+'-REPORT'].join('\n');
+}
 function buildReportHTML(type,now,isZ,d){
+  reportPrintSnapshot={type,text:buildReportText(type,now,d)};
   const dtStr=now.toLocaleDateString('en-SG',{day:'2-digit',month:'short',year:'numeric'})+' '+now.toLocaleTimeString('en-SG',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
   const skuRows=SKUS.map(s=>`<div class="report-row"><span class="rl">${s.name}</span><span class="rv">${d.skuQty[s.name]||0} pcs · ${fmt((d.skuQty[s.name]||0)*s.price)}</span></div>`).join('');
   const payRows=['cash','paynow','cdc','voucher','sundry'].filter(p=>p!=='sundry'||(d.payTotals.sundry||0)>0).map(p=>`<div class="report-row"><span class="rl">${p.charAt(0).toUpperCase()+p.slice(1)}</span><span class="rv">${fmt(d.payTotals[p]||0)} (${d.payCount[p]||0})</span></div>`).join('');
@@ -1897,8 +1967,8 @@ function buildReportHTML(type,now,isZ,d){
     <div class="report-section"><div class="report-section-title">Payment Types</div>${payRows}</div>
     <div class="report-section"><div class="report-section-title">Hourly Sales</div>${hourlyBars}</div>
     <div class="modal-actions">
-      <button class="btn-secondary" onclick="closeReport(${isZ})">Close</button>
-      <button class="btn-primary" onclick="printReport('${type}');closeReport(${isZ})">🖨️ Print ${type}-Report</button>
+      <button class="btn-secondary" onclick="closeReport(${isZ})">${isZ?'Finish &amp; close terminal':'Close'}</button>
+      <button class="btn-primary" onclick="printReport('${type}')">🖨️ Print ${type}-Report</button>
     </div>`;
 }
 function reopenTerminal(){
