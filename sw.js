@@ -1,4 +1,4 @@
-const CACHE = 'wtp-v20-report-text';
+const CACHE = 'wtp-v21-xprinter58';
 const SHELL = ['index.html', 'dashboard.html', 'logo.png'];
 
 self.addEventListener('install', e => {
