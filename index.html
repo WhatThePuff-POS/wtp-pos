@@ -1822,7 +1822,7 @@ function openPrinterSettings(){
   if(!dlg){
     dlg=document.createElement('dialog');dlg.id='printer-settings';
     dlg.style.cssText='max-width:420px;width:90%;padding:24px;border-radius:12px;background:#202020;color:white;border:1px solid #777';
-    dlg.innerHTML=`<h2>Printer setup</h2><p>For Android Bluetooth printing, install RawBT, select your paired Xprinter in RawBT and run its test print first.</p>
+    dlg.innerHTML=`<h2>Printer setup · v21</h2><p><button type="button" onclick="useXprinter58()">Use XP-58IIT (58 mm)</button></p><p>For Android Bluetooth printing, install RawBT, select your paired Xprinter in RawBT and run its test print first.</p>
       <p><label>Print method <select id="printer-mode"><option value="browser">Browser print dialog</option><option value="rawbt">Android Bluetooth (RawBT)</option></select></label></p>
       <p><label>Paper width <select id="printer-width"><option value="32">58 mm / 32 columns</option><option value="48">80 mm / 48 columns</option></select></label></p>
       <p>RawBT prints text receipts. Android may ask to open the app. This page cannot confirm whether paper was printed.</p>
@@ -1830,6 +1830,11 @@ function openPrinterSettings(){
     document.body.appendChild(dlg);
   }
   const c=printerConfig();document.getElementById('printer-mode').value=c.mode;document.getElementById('printer-width').value=String(c.width);dlg.showModal();
+}
+function useXprinter58(){
+  localStorage.setItem('wtp_printer',JSON.stringify({mode:'rawbt',width:32}));
+  document.getElementById('printer-settings').close();
+  showToast('✅','XP-58IIT direct text printing selected');
 }
 function savePrinterSettings(){
   localStorage.setItem('wtp_printer',JSON.stringify({mode:document.getElementById('printer-mode').value,width:Number(document.getElementById('printer-width').value)}));
@@ -1848,20 +1853,34 @@ function buildReceiptText(txn){
     row('TOTAL',fmt(txn.total)),rule,...(txn.payments||[]).map(p=>row(p.type.toUpperCase(),fmt(p.amount))),...(txn.cashReceived!==undefined?[row('Cash received',fmt(txn.cashReceived)),row('Change given',fmt(txn.changeDue))]:[]),rule,
     'Thank you for your support!','See you again soon'].join('\n');
 }
-function sendPrintText(text,plainText=false){
+let thermalPrintNotBefore=0;
+function thermalPrintBytes(text,width){
+  const ascii=String(text).normalize('NFKD').replace(/[\u0300-\u036f]/g,'')
+    .replace(/\r\n?/g,'\n').replace(/[^\x20-\x7E\n]/g,'?');
+  const wrapped=ascii.split('\n').flatMap(line=>{
+    const lines=[];
+    while(line.length>width){lines.push(line.slice(0,width));line=line.slice(width);}
+    lines.push(line);return lines;
+  }).join('\n');
+  // ESC/POS: initialize, standard mode, single-byte text, Font A,
+  // normal size, left alignment and default line spacing. No raster/logo data.
+  const init='\x1b@\x1bS\x1c.\x1bM\x00\x1b!\x00\x1d!\x00\x1ba\x00\x1b2';
+  return init+wrapped+'\n\n\n';
+}
+function sendPrintText(text){
   const config=printerConfig();
   if(config.mode==='rawbt'){
     if(!/Android/i.test(navigator.userAgent)){showToast('⚠️','RawBT requires Android. Change Printer settings.');return false;}
-    // Conservative ASCII encoding avoids printer-dependent UTF-8/code-page corruption.
-    const ascii=text.normalize('NFKD').replace(/[^\x20-\x7E\n]/g,'?');
-    if(plainText){
-      // Let RawBT apply its configured printer driver and character encoding.
-      window.location.href='rawbt:'+encodeURIComponent(ascii+'\n\n');
-    }else{
-      const bytes='\x1b@'+ascii+'\n\n\n';
+    const now=Date.now();
+    if(now<thermalPrintNotBefore){showToast('⏳','Wait a few seconds before sending another print');return false;}
+    const bytes=thermalPrintBytes(text,config.width===48?48:32);
+    thermalPrintNotBefore=now+5000;
+    try{
       window.location.href='rawbt:base64,'+btoa(bytes);
+    }catch(error){
+      thermalPrintNotBefore=0;showToast('⚠️','Could not open RawBT. Check printer setup.');return false;
     }
-    showToast('🖨️','Opening RawBT — check the printer before retrying');
+    showToast('🖨️','Sent to RawBT. Wait for paper to finish before the next print.');
   }else{
     const target=document.getElementById('receipt-print');
     target.replaceChildren();const pre=document.createElement('pre');pre.textContent=text;
@@ -1937,7 +1956,7 @@ function closeReport(isZ){
 let reportPrintSnapshot=null;
 function printReport(type){
   if(!reportPrintSnapshot||reportPrintSnapshot.type!==type){showToast('⚠️','Open the report again before printing');return false;}
-  return sendPrintText(reportPrintSnapshot.text,true);
+  return sendPrintText(reportPrintSnapshot.text);
 }
 function reportTextCell(value){
   return String(value??'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'')
@@ -1960,9 +1979,9 @@ function reportRow(label,value,width){
 }
 function testReportPrinter(){
   const w=printerConfig().width===48?48:32;
-  return sendPrintText(['WTP REPORT TEST v20','-'.repeat(w),
+  return sendPrintText(['WTP REPORT TEST v21','-'.repeat(w),
     reportRow('Transactions',3,w),reportRow('Net revenue','$12.50',w),
-    reportRow('Cash','$10.00',w),'END OF TEST'].join('\n'),true);
+    reportRow('Cash','$10.00',w),'END OF TEST'].join('\n'));
 }
 function buildReportText(type,now,d){
   const w=printerConfig().width===48?48:32,row=(a,b)=>reportRow(a,b,w),rule='-'.repeat(w);
@@ -2006,7 +2025,7 @@ function buildReportHTML(type,now,isZ,d){
       <div class="rh-brand">What The Puff</div>
       <div class="rh-type">${type}-Report · ${d.outlet}</div>
       <div class="rh-dt">${dtStr}</div>
-      <div class="rh-dt">Print format v20 · ${printerConfig().width===48?'80 mm':'58 mm'}</div>
+      <div class="rh-dt">Print format v21 · ${printerConfig().width===48?'80 mm':'58 mm'}</div>
     </div>
     <div class="report-section">
       <div class="report-section-title">Revenue Summary</div>
