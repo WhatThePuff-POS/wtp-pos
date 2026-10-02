@@ -1848,14 +1848,19 @@ function buildReceiptText(txn){
     row('TOTAL',fmt(txn.total)),rule,...(txn.payments||[]).map(p=>row(p.type.toUpperCase(),fmt(p.amount))),...(txn.cashReceived!==undefined?[row('Cash received',fmt(txn.cashReceived)),row('Change given',fmt(txn.changeDue))]:[]),rule,
     'Thank you for your support!','See you again soon'].join('\n');
 }
-function sendPrintText(text){
+function sendPrintText(text,plainText=false){
   const config=printerConfig();
   if(config.mode==='rawbt'){
     if(!/Android/i.test(navigator.userAgent)){showToast('⚠️','RawBT requires Android. Change Printer settings.');return false;}
     // Conservative ASCII encoding avoids printer-dependent UTF-8/code-page corruption.
     const ascii=text.normalize('NFKD').replace(/[^\x20-\x7E\n]/g,'?');
-    const bytes='\x1b@'+ascii+'\n\n\n';
-    window.location.href='rawbt:base64,'+btoa(bytes);
+    if(plainText){
+      // Let RawBT apply its configured printer driver and character encoding.
+      window.location.href='rawbt:'+encodeURIComponent(ascii+'\n\n');
+    }else{
+      const bytes='\x1b@'+ascii+'\n\n\n';
+      window.location.href='rawbt:base64,'+btoa(bytes);
+    }
     showToast('🖨️','Opening RawBT — check the printer before retrying');
   }else{
     const target=document.getElementById('receipt-print');
@@ -1932,15 +1937,51 @@ function closeReport(isZ){
 let reportPrintSnapshot=null;
 function printReport(type){
   if(!reportPrintSnapshot||reportPrintSnapshot.type!==type){showToast('⚠️','Open the report again before printing');return false;}
-  return sendPrintText(reportPrintSnapshot.text);
+  return sendPrintText(reportPrintSnapshot.text,true);
+}
+function reportTextCell(value){
+  return String(value??'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'')
+    .replace(/[^\x20-\x7E]/g,' ').replace(/\s+/g,' ').trim();
+}
+function wrapReportLine(value,width){
+  const text=reportTextCell(value),lines=[];
+  let rest=text;
+  while(rest.length>width){
+    let cut=rest.lastIndexOf(' ',width);
+    if(cut<1)cut=width;
+    lines.push(rest.slice(0,cut));rest=rest.slice(cut).trimStart();
+  }
+  lines.push(rest);return lines.join('\n');
+}
+function reportRow(label,value,width){
+  label=reportTextCell(label);value=reportTextCell(value);
+  if(label.length+value.length+1<=width)return printLine(label,value,width);
+  return wrapReportLine(label,width)+'\n'+wrapReportLine(value,width).split('\n').map(l=>l.padStart(width)).join('\n');
+}
+function testReportPrinter(){
+  const w=printerConfig().width===48?48:32;
+  return sendPrintText(['WTP REPORT TEST v20','-'.repeat(w),
+    reportRow('Transactions',3,w),reportRow('Net revenue','$12.50',w),
+    reportRow('Cash','$10.00',w),'END OF TEST'].join('\n'),true);
 }
 function buildReportText(type,now,d){
-  const w=printerConfig().width,row=(a,b)=>printLine(a,b,w),rule='-'.repeat(w);
-  return ['WHAT THE PUFF!',type+'-REPORT',d.outlet,now.toLocaleString('en-SG'),rule,'REVENUE SUMMARY',
-    row('Transactions',d.txnCount),row('Gross Revenue',fmt(d.grossRev)),row('Senior Discounts','-'+fmt(d.discountTotal)),row('Net Revenue',fmt(d.netRev)),rule,'SALES BY SKU (before discounts)',
-    ...SKUS.map(s=>row(s.name,(d.skuQty[s.name]||0)+' pcs '+fmt((d.skuQty[s.name]||0)*s.price))),rule,'PAYMENT TYPES',
-    ...Object.keys(d.payTotals).map(p=>row(p,fmt(d.payTotals[p]||0)+' ('+(d.payCount[p]||0)+')')),rule,'HOURLY SALES',
-    ...Object.keys(d.hourlyRev).sort((a,b)=>Number(a)-Number(b)).map(h=>row(String(h).padStart(2,'0')+':00',fmt(d.hourlyRev[h])+' ('+(d.hourlyCount[h]||0)+')')),rule,'END OF '+type+'-REPORT'].join('\n');
+  const w=printerConfig().width===48?48:32,row=(a,b)=>reportRow(a,b,w),rule='-'.repeat(w);
+  const lines=['WHAT THE PUFF!',type+'-REPORT',wrapReportLine(d.outlet,w),
+    now.toLocaleDateString('en-SG')+' '+now.toLocaleTimeString('en-SG',{hour:'2-digit',minute:'2-digit',hour12:false}),
+    rule,'REVENUE SUMMARY',row('Transactions',d.txnCount),
+    row('Gross Revenue',fmt(d.grossRev)),row('Senior Discounts','-'+fmt(d.discountTotal)),
+    row('Net Revenue',fmt(d.netRev)),rule,'SALES BY SKU (before discounts)'];
+  const sold=SKUS.filter(s=>(d.skuQty[s.name]||0)!==0);
+  lines.push(...(sold.length?sold.map(s=>row(s.name,(d.skuQty[s.name]||0)+' pcs '+fmt((d.skuQty[s.name]||0)*s.price))):['No items sold']));
+  lines.push(rule,'PAYMENT TYPES');
+  lines.push(...Object.keys(d.payTotals).filter(p=>p!=='sundry'||d.payTotals[p])
+    .map(p=>row(p,fmt(d.payTotals[p]||0)+' ('+(d.payCount[p]||0)+')')));
+  lines.push(rule,'HOURLY SALES');
+  const hours=Object.keys(d.hourlyRev).sort((a,b)=>Number(a)-Number(b));
+  lines.push(...(hours.length?hours.map(h=>row(String(h).padStart(2,'0')+':00',
+    fmt(d.hourlyRev[h])+' ('+(d.hourlyCount[h]||0)+')')):['No sales']));
+  lines.push(rule,'END OF '+type+'-REPORT');
+  return lines.map(l=>l.split('\n').map(part=>part.length>w?wrapReportLine(part,w):part).join('\n')).join('\n');
 }
 function buildReportHTML(type,now,isZ,d){
   reportPrintSnapshot={type,text:buildReportText(type,now,d)};
@@ -1965,6 +2006,7 @@ function buildReportHTML(type,now,isZ,d){
       <div class="rh-brand">What The Puff</div>
       <div class="rh-type">${type}-Report · ${d.outlet}</div>
       <div class="rh-dt">${dtStr}</div>
+      <div class="rh-dt">Print format v20 · ${printerConfig().width===48?'80 mm':'58 mm'}</div>
     </div>
     <div class="report-section">
       <div class="report-section-title">Revenue Summary</div>
@@ -1978,7 +2020,8 @@ function buildReportHTML(type,now,isZ,d){
     <div class="report-section"><div class="report-section-title">Hourly Sales</div>${hourlyBars}</div>
     <div class="modal-actions">
       <button class="btn-secondary" onclick="closeReport(${isZ})">${isZ?'Finish &amp; close terminal':'Close'}</button>
-      <button class="btn-primary" onclick="printReport('${type}')">🖨️ Print ${type}-Report</button>
+      <button type="button" class="btn-secondary" onclick="testReportPrinter()">Short print test</button>
+      <button type="button" class="btn-primary" onclick="printReport('${type}')">🖨️ Print ${type}-Report</button>
     </div>`;
 }
 function reopenTerminal(){
