@@ -693,13 +693,14 @@ html,body{height:100%;background:#1a1a1a;font-family:'Segoe UI',system-ui,sans-s
 
 <!-- ORDER COMPLETE -->
 <div class="order-complete" id="order-complete" onclick="this.classList.remove('open')">
-  <div class="oc-card">
+  <div class="oc-card" onclick="event.stopPropagation()">
     <div class="oc-check">✅</div>
     <div class="oc-label">Order</div>
     <div class="oc-txnid" id="oc-txnid">—</div>
     <div class="oc-total" id="oc-total"></div>
+    <div id="oc-cash" style="display:none;width:100%;margin:12px 0"><div>Cash received: <strong id="oc-cash-received"></strong></div><div class="change-display"><span class="lbl">Change to give</span><span class="amt" id="oc-change"></span></div></div>
     <button class="oc-print-btn" onclick="event.stopPropagation();printReceipt(lastReceipt)">🖨️ Print Receipt</button>
-    <div style="font-size:11px;color:var(--text3)">Tap anywhere to dismiss</div>
+    <button class="oc-print-btn" onclick="document.getElementById('order-complete').classList.remove('open')">Done / Next order</button>
   </div>
 </div>
 
@@ -1635,7 +1636,7 @@ function buildCashPresets(){
     </div>`;
 }
 function setCash(amount){
-  if(paymentInFlight) return;
+  if(paymentInFlight||!Number.isFinite(amount)||Math.round(amount*100)<Math.round(remainingDue*100)) return;
   cashGiven=amount;
   const change=amount-remainingDue;
   document.getElementById('change-display').style.display='flex';
@@ -1725,6 +1726,11 @@ function endTransaction(payments,sundry){
   if(paymentInFlight) return;
   paymentInFlight=true;
   try{
+    const cashApplied=payments.filter(p=>p.type==='cash').reduce((sum,p)=>sum+Math.round(p.amount*100),0);
+    const cashTendered=cashApplied>0?Math.round(Number(cashGiven)*100):null;
+    if(cashApplied>0&&(cashGiven===null||!Number.isFinite(cashTendered)||cashTendered<cashApplied)){
+      showToast('⚠️','Enter enough cash received before completing payment');return;
+    }
     txnCounter++;
     const now=new Date();
     const txnId='TXN'+String(txnCounter).padStart(4,'0');
@@ -1740,6 +1746,7 @@ function endTransaction(payments,sundry){
       discount:getDiscountAmt(),
       total:Math.round((getTotal()+sundryAmt)*100)/100,
       payments:[...payments],
+      ...(cashApplied>0?{cashReceived:cashTendered/100,changeDue:(cashTendered-cashApplied)/100}:{}),
       discountType:seniorDiscount?'Senior Citizen 10%':null,
       ...(sundryAmt>0&&{sundry:sundryAmt}),
       timestamp:now.toISOString()
@@ -1754,9 +1761,12 @@ function endTransaction(payments,sundry){
     updateTopbarStats();
     document.getElementById('oc-txnid').textContent=txnId;
     document.getElementById('oc-total').textContent=fmt(txn.total)+(txn.discountType?' (Senior disc.)':'');
+    document.getElementById('oc-cash').style.display=txn.cashReceived!==undefined?'block':'none';
+    document.getElementById('oc-cash-received').textContent=fmt(txn.cashReceived||0);
+    document.getElementById('oc-change').textContent=fmt(txn.changeDue||0);
     const oc=document.getElementById('order-complete');
     oc.classList.add('open');
-    setTimeout(()=>oc.classList.remove('open'),2500);
+    // Keep totals and change visible until the cashier dismisses them.
   } finally {
     paymentInFlight=false;
   }
@@ -1793,7 +1803,7 @@ function buildReceiptHTML(txn){
     <hr class="rp-sep">
     <table class="rp-tbl"><tr class="rp-tot"><td colspan="2">TOTAL</td><td class="rp-r">${fmt(txn.total)}</td></tr></table>
     <hr class="rp-sep">
-    <table class="rp-tbl">${payRows}</table>
+    <table class="rp-tbl">${payRows}${txn.cashReceived!==undefined?`<tr><td colspan="2">Cash received</td><td class="rp-r">${fmt(txn.cashReceived)}</td></tr><tr><td colspan="2">Change given</td><td class="rp-r">${fmt(txn.changeDue)}</td></tr>`:''}</table>
     <hr class="rp-dash">
     <div class="rp-foot">
       Thank you for your support!<br>
@@ -1835,7 +1845,7 @@ function buildReceiptText(txn){
   return ['WHAT THE PUFF!',txn.outlet,txn.date+' '+txn.time,'Receipt: '+txn.id,rule,
     ...(txn.items||[]).map(i=>row(i.qty+'x '+i.name,fmt(i.sub))),rule,
     row('Subtotal',fmt(txn.subtotal)),...(txn.discount>0?[row('Senior Disc (10%)','-'+fmt(txn.discount))]:[]),
-    row('TOTAL',fmt(txn.total)),rule,...(txn.payments||[]).map(p=>row(p.type.toUpperCase(),fmt(p.amount))),rule,
+    row('TOTAL',fmt(txn.total)),rule,...(txn.payments||[]).map(p=>row(p.type.toUpperCase(),fmt(p.amount))),...(txn.cashReceived!==undefined?[row('Cash received',fmt(txn.cashReceived)),row('Change given',fmt(txn.changeDue))]:[]),rule,
     'Thank you for your support!','See you again soon'].join('\n');
 }
 function sendPrintText(text){
