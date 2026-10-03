@@ -1903,9 +1903,56 @@ function printReceipt(txn){
 }
 
 // ============ REPRINT ============
+function recentReceiptTransactions(){
+  return transactions
+    .map((txn,index)=>({txn,index}))
+    .filter(({txn})=>!txn.voided && txn.outlet===currentOutlet)
+    .sort((a,b)=>(Date.parse(b.txn.timestamp)||0)-(Date.parse(a.txn.timestamp)||0)||b.index-a.index)
+    .slice(0,10).map(({txn})=>txn);
+}
 function reprintLast(){
-  if(!lastReceipt){showToast('⚠️','No previous receipt');return;}
-  printReceipt(lastReceipt);
+  let dlg=document.getElementById('reprint-history');
+  if(!dlg){
+    dlg=document.createElement('dialog');
+    dlg.id='reprint-history';
+    dlg.style.cssText='margin:auto;width:560px;max-width:95vw;max-height:90vh;padding:22px;border:1px solid var(--border2);border-radius:14px;background:var(--bg2);color:var(--text);overflow-y:auto';
+    document.body.appendChild(dlg);
+  }
+  dlg.replaceChildren();
+  const title=document.createElement('h2');
+  title.className='modal-title';title.textContent='Reprint receipt';
+  const sub=document.createElement('p');
+  sub.className='modal-sub';
+  sub.textContent='Last 10 transactions available for '+currentOutlet+' · newest first';
+  dlg.append(title,sub);
+  const recent=recentReceiptTransactions();
+  if(!recent.length){
+    const empty=document.createElement('p');
+    empty.textContent='No transactions available to reprint.';
+    dlg.appendChild(empty);
+  }
+  recent.forEach(txn=>{
+    const details=document.createElement('details');
+    details.style.cssText='margin:10px 0;padding:12px;border:1px solid var(--border2);border-radius:8px;background:var(--bg3)';
+    const summary=document.createElement('summary');
+    summary.style.cssText='cursor:pointer;line-height:1.6;min-height:44px;overflow-wrap:anywhere';
+    summary.textContent=(txn.id||txn.txnId)+' · '+fmt(txn.total)+' · '+txn.date+' '+txn.time;
+    const preview=document.createElement('pre');
+    preview.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.5 monospace;margin:12px 0';
+    preview.textContent=buildReceiptText(txn);
+    const print=document.createElement('button');
+    print.type='button';print.className='btn-primary';print.textContent='🖨 Reprint this receipt';
+    print.style.width='100%';
+    print.addEventListener('click',()=>printReceipt(txn));
+    details.append(summary,preview,print);
+    dlg.appendChild(details);
+  });
+  const close=document.createElement('button');
+  close.type='button';close.className='btn-secondary';close.textContent='Close';
+  close.style.cssText='width:100%;margin-top:14px';
+  close.addEventListener('click',()=>dlg.close());
+  dlg.appendChild(close);
+  if(!dlg.open)dlg.showModal();
 }
 
 // ============ REPORTS ============
