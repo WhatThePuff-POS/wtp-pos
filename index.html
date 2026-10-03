@@ -1822,11 +1822,11 @@ function openPrinterSettings(){
   if(!dlg){
     dlg=document.createElement('dialog');dlg.id='printer-settings';
     dlg.style.cssText='max-width:420px;width:90%;padding:24px;border-radius:12px;background:#202020;color:white;border:1px solid #777';
-    dlg.innerHTML=`<h2>Printer setup · v21</h2><p><button type="button" onclick="useXprinter58()">Use XP-58IIT (58 mm)</button></p><p>For Android Bluetooth printing, install RawBT, select your paired Xprinter in RawBT and run its test print first.</p>
+    dlg.innerHTML=`<h2>Printer setup · v23</h2><p><button type="button" onclick="useXprinter58()">Use XP-58IIT (58 mm)</button></p><p>For Android Bluetooth printing, install RawBT, select your paired Xprinter in RawBT and run its test print first.</p>
       <p><label>Print method <select id="printer-mode"><option value="browser">Browser print dialog</option><option value="rawbt">Android Bluetooth (RawBT)</option></select></label></p>
       <p><label>Paper width <select id="printer-width"><option value="32">58 mm / 32 columns</option><option value="48">80 mm / 48 columns</option></select></label></p>
       <p>RawBT prints text receipts. Android may ask to open the app. This page cannot confirm whether paper was printed.</p>
-      <button onclick="savePrinterSettings()">Save</button> <button onclick="testPrinter()">Save &amp; test</button> <button onclick="document.getElementById('printer-settings').close()">Close</button>`;
+      <p><button type="button" onclick="testStyledReceipt()">Print styled receipt test</button></p><p>This sample tests larger text and a bold total. It does not record a sale.</p><button onclick="savePrinterSettings()">Save</button> <button onclick="testPrinter()">Save &amp; test</button> <button onclick="document.getElementById('printer-settings').close()">Close</button>`;
     document.body.appendChild(dlg);
   }
   const c=printerConfig();document.getElementById('printer-mode').value=c.mode;document.getElementById('printer-width').value=String(c.width);dlg.showModal();
@@ -1867,13 +1867,36 @@ function thermalPrintBytes(text,width){
   const init='\x1b@\x1bS\x1c.\x1bM\x00\x1b!\x00\x1d!\x00\x1ba\x00\x1b2';
   return init+wrapped+'\n\n\n';
 }
-function sendPrintText(text){
+
+function styledReceiptTestBytes(width){
+  const row=(a,b)=>printLine(a,b,width),rule='-'.repeat(width);
+  // Only fixed sample text and ESC/POS text styling; no image data.
+  const init='\x1b@\x1bS\x1c.\x1bM\x00\x1b!\x00\x1d!\x00\x1ba\x00\x1b2';
+  const center='\x1ba\x01',left='\x1ba\x00';
+  const bold='\x1bE\x01',normal='\x1bE\x00',large='\x1d!\x11',sizeReset='\x1d!\x00';
+  return init+center+bold+large+'WHAT THE PUFF!\n'+sizeReset+normal+
+    'PRINT TEST - NOT A SALE\nBedok 216\n03 Oct 2026  12:00\nReceipt: STYLE-TEST\n\n'+
+    left+rule+'\n'+row('1x Black Pepper','$2.50')+'\n'+row('2x Original','$4.00')+'\n'+
+    rule+'\n'+row('Subtotal','$6.50')+'\n\n'+bold+'\x1d!\x01'+row('TOTAL','$6.50')+'\n'+
+    sizeReset+normal+rule+'\n'+row('CASH','$6.50')+'\n'+row('Cash received','$10.00')+'\n'+
+    row('Change given','$3.50')+'\n'+rule+'\n\n'+center+'Thank you for your support!\nSee you again soon\n'+
+    left+normal+sizeReset+'\n\n\n';
+}
+function testStyledReceipt(){
+  const mode=document.getElementById('printer-mode').value;
+  if(mode!=='rawbt'){showToast('⚠️','Select Android Bluetooth (RawBT) for this test');return false;}
+  savePrinterSettings();
+  return sendPrintText('',true);
+}
+
+function sendPrintText(text,styledTest=false){
   const config=printerConfig();
   if(config.mode==='rawbt'){
     if(!/Android/i.test(navigator.userAgent)){showToast('⚠️','RawBT requires Android. Change Printer settings.');return false;}
     const now=Date.now();
     if(now<thermalPrintNotBefore){showToast('⏳','Wait a few seconds before sending another print');return false;}
-    const bytes=thermalPrintBytes(text,config.width===48?48:32);
+    const width=config.width===48?48:32;
+    const bytes=styledTest?styledReceiptTestBytes(width):thermalPrintBytes(text,width);
     thermalPrintNotBefore=now+5000;
     try{
       window.location.href='rawbt:base64,'+btoa(bytes);
