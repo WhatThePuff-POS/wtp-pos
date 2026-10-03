@@ -1,4 +1,4 @@
-const CACHE = 'wtp-v21-xprinter58';
+const CACHE = 'wtp-v22-reprint-history';
 const SHELL = ['index.html', 'dashboard.html', 'logo.png'];
 
 self.addEventListener('install', e => {
