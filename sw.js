@@ -1,4 +1,4 @@
-const CACHE = 'wtp-v22-reprint-history';
+const CACHE = 'wtp-v23-styled-test';
 const SHELL = ['index.html', 'dashboard.html', 'logo.png'];
 
 self.addEventListener('install', e => {
