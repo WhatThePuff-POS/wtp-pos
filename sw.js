@@ -1,4 +1,4 @@
-const CACHE = 'wtp-v24-cash-drawer';
+const CACHE = 'wtp-v25-remove-drawer';
 const SHELL = ['index.html', 'dashboard.html', 'logo.png'];
 
 self.addEventListener('install', e => {
