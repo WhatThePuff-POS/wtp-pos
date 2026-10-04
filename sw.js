@@ -1,4 +1,4 @@
-const CACHE = 'wtp-v23-styled-test';
+const CACHE = 'wtp-v24-cash-drawer';
 const SHELL = ['index.html', 'dashboard.html', 'logo.png'];
 
 self.addEventListener('install', e => {
