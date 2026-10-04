@@ -547,7 +547,6 @@ html,body{height:100%;background:#1a1a1a;font-family:'Segoe UI',system-ui,sans-s
       <span class="topbar-time" id="clock"></span>
       <div class="nav-btns">
         <button class="nav-btn" onclick="openPrinterSettings()">🖨 Printer</button>
-        <button class="nav-btn" onclick="manualOpenDrawer()">💰 Drawer</button>
         <button class="nav-btn" onclick="openInventoryModal()">📦 Stock</button>
         <button class="nav-btn" onclick="requireAdmin('Manage Products','Enter admin PIN to add or edit products',openProductModal,'callback')">🧁 Products</button>
         <button class="nav-btn" onclick="openXReport()">X-Report</button>
@@ -956,10 +955,7 @@ function updateTopbarStats(){
   const net=todayTxns.reduce((s,t)=>s+t.total,0);
   el.textContent=todayTxns.length+'txn · '+fmt(net);
 }
-function manualOpenDrawer(){
-  openCashDrawer();
-  showToast('💰','Cash drawer opened');
-}
+
 
 // ============ SYNC ============
 function setSyncStatus(s){
@@ -1587,7 +1583,7 @@ function selectPayMethod(method){
   document.getElementById('pm-'+method).classList.add('selected');
   ['cash-ui','cdc-ui','voucher-ui'].forEach(id=>document.getElementById(id).style.display='none');
   document.getElementById('pay-confirm-btn').disabled=true;
-  if(method==='cash'){document.getElementById('cash-ui').style.display='block';buildCashPresets();if(printerConfig().drawer!==false)openCashDrawer();}
+  if(method==='cash'){document.getElementById('cash-ui').style.display='block';buildCashPresets();}
   else if(method==='paynow'){document.getElementById('pay-confirm-btn').disabled=false;}
   else if(method==='cdc'){document.getElementById('cdc-ui').style.display='block';buildCdcPresets();}
   else if(method==='voucher'){document.getElementById('voucher-ui').style.display='block';}
@@ -1641,7 +1637,6 @@ function setCash(amount){
   const change=amount-remainingDue;
   document.getElementById('change-display').style.display='flex';
   document.getElementById('change-amount').textContent=fmt(Math.max(0,change));
-  openCashDrawer();
   splitPayments.push({type:'cash',amount:remainingDue});
   endTransaction(splitPayments);
 }
@@ -1660,14 +1655,7 @@ function setCustomCash(val){
   document.getElementById('change-amount').textContent=change>=0?fmt(change):'—';
   document.getElementById('pay-confirm-btn').disabled=amount<remainingDue;
 }
-function openCashDrawer(){
-  // Cash drawer opens via ESC/POS command through the receipt printer
-  // When printer is connected, this will fire automatically via print trigger
-  // For WebUSB/WebBluetooth printers: implement ESC p 0 command here
-  console.log('Cash drawer trigger: ESC p 0 48 255 255');
-  // Placeholder for when printer is set up:
-  // window.triggerCashDrawer && window.triggerCashDrawer();
-}
+
 function updateSplitRemain(type){
   const val=parseFloat(document.getElementById(type+'-amount-input').value)||0;
   const remEl=document.getElementById(type+'-remain');
@@ -1822,22 +1810,22 @@ function openPrinterSettings(){
   if(!dlg){
     dlg=document.createElement('dialog');dlg.id='printer-settings';
     dlg.style.cssText='max-width:420px;width:90%;padding:24px;border-radius:12px;background:#202020;color:white;border:1px solid #777';
-    dlg.innerHTML=`<h2>Printer setup · v24</h2><p><button type="button" onclick="useXprinter58()">Use XP-58IIT (58 mm)</button></p><p>For Android Bluetooth printing, install RawBT, select your paired Xprinter in RawBT and run its test print first.</p>
+    dlg.innerHTML=`<h2>Printer setup · v25</h2><p><button type="button" onclick="useXprinter58()">Use XP-58IIT (58 mm)</button></p><p>For Android Bluetooth printing, install RawBT, select your paired Xprinter in RawBT and run its test print first.</p>
       <p><label>Print method <select id="printer-mode"><option value="browser">Browser print dialog</option><option value="rawbt">Android Bluetooth (RawBT)</option></select></label></p>
       <p><label>Paper width <select id="printer-width"><option value="32">58 mm / 32 columns</option><option value="48">80 mm / 48 columns</option></select></label></p>
-      <p><label><input type="checkbox" id="printer-drawer"> Open drawer when Cash is selected</label></p><p><button type="button" onclick="testCashDrawer()">Save &amp; test drawer</button></p><p>Drawer opening requires Android Bluetooth mode and a compatible drawer connected to the printer. No sale is recorded by the test.</p><p>RawBT prints text receipts. Android may ask to open the app. This page cannot confirm whether paper was printed.</p>
+      <p>RawBT prints text receipts. Android may ask to open the app. This page cannot confirm whether paper was printed.</p>
       <p><button type="button" onclick="testStyledReceipt()">Print styled receipt test</button></p><p>This sample tests larger text and a bold total. It does not record a sale.</p><button onclick="savePrinterSettings()">Save</button> <button onclick="testPrinter()">Save &amp; test</button> <button onclick="document.getElementById('printer-settings').close()">Close</button>`;
     document.body.appendChild(dlg);
   }
-  const c=printerConfig();document.getElementById('printer-mode').value=c.mode;document.getElementById('printer-width').value=String(c.width);document.getElementById('printer-drawer').checked=c.drawer!==false;dlg.showModal();
+  const c=printerConfig();document.getElementById('printer-mode').value=c.mode;document.getElementById('printer-width').value=String(c.width);dlg.showModal();
 }
 function useXprinter58(){
-  localStorage.setItem('wtp_printer',JSON.stringify({...printerConfig(),mode:'rawbt',width:32}));
+  localStorage.setItem('wtp_printer',JSON.stringify({mode:'rawbt',width:32}));
   document.getElementById('printer-settings').close();
   showToast('✅','XP-58IIT direct text printing selected');
 }
 function savePrinterSettings(){
-  localStorage.setItem('wtp_printer',JSON.stringify({mode:document.getElementById('printer-mode').value,width:Number(document.getElementById('printer-width').value),drawer:document.getElementById('printer-drawer').checked}));
+  localStorage.setItem('wtp_printer',JSON.stringify({mode:document.getElementById('printer-mode').value,width:Number(document.getElementById('printer-width').value)}));
   document.getElementById('printer-settings').close();
 }
 function testPrinter(){savePrinterSettings();sendPrintText('WHAT THE PUFF!\nPRINTER TEST\n'+new Date().toLocaleString('en-SG')+'\n0123456789\nPrint connection test');}
@@ -1854,24 +1842,6 @@ function buildReceiptText(txn){
     'Thank you for your support!','See you again soon'].join('\n');
 }
 let thermalPrintNotBefore=0;
-// Standalone ESC/POS drawer pulse: pin 2, 100 ms on / 500 ms off.
-// No reset, printable text, paper feed, or cut commands in this job.
-function openCashDrawer(){
-  if(printerConfig().mode!=='rawbt'||!/Android/i.test(navigator.userAgent)){
-    showToast('⚠️','Drawer needs Android Bluetooth (RawBT) in Printer settings');return false;
-  }
-  const now=Date.now();
-  if(now<thermalPrintNotBefore){showToast('⏳','Printer busy. Wait a few seconds, then tap Cash again to open drawer');return false;}
-  thermalPrintNotBefore=now+5000;
-  try{window.location.href='rawbt:base64,'+btoa('\x1bp\x00\x32\xfa');}
-  catch(error){thermalPrintNotBefore=0;showToast('⚠️','Could not send drawer command. Check RawBT.');return false;}
-  showToast('💵','Drawer command sent. Check that the drawer opens.');
-  return true;
-}
-function testCashDrawer(){
-  savePrinterSettings();
-  return openCashDrawer();
-}
 function thermalPrintBytes(text,width){
   const ascii=String(text).normalize('NFKD').replace(/[\u0300-\u036f]/g,'')
     .replace(/\r\n?/g,'\n').replace(/[^\x20-\x7E\n]/g,'?');
