@@ -1,4 +1,4 @@
-const CACHE = 'wtp-v25-remove-drawer';
+const CACHE = 'wtp-v27-history-24hours';
 const SHELL = ['index.html', 'dashboard.html', 'logo.png'];
 
 self.addEventListener('install', e => {
