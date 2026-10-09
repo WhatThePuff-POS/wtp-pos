@@ -11,7 +11,7 @@
 <link rel="manifest" href="manifest.json">
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-  import { getFirestore, collection, query, orderBy, where, limit, onSnapshot, doc, updateDoc, getDocs } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+  import { getFirestore, collection, query, orderBy, where, limit, startAfter, onSnapshot, doc, updateDoc, getDocs } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
   const cfg = {
     apiKey:"AIzaSyAPCeTkc3cTqRNIDRhKQcpjrsUcckIUg68",
@@ -116,7 +116,7 @@
   };
 
   function todayFormatted() {
-    return new Date().toLocaleDateString('en-SG',{day:'2-digit',month:'short',year:'numeric'});
+    return new Date().toLocaleDateString('en-SG',{timeZone:'Asia/Singapore',day:'2-digit',month:'short',year:'numeric'});
   }
 
   function getDateFilter() {
@@ -129,10 +129,11 @@
 
   window.refreshDashboard = function() {
     const dateStr = getDateFilter();
+    if(dateStr!==listenerDate){startListener();return;}
     const outlet = document.getElementById('outlet-filter').value;
     let txns = allTransactions.filter(t => !t.voided && t.date === dateStr);
     if (outlet !== 'All') txns = txns.filter(t => t.outlet === outlet);
-    renderDashboard(txns, allTransactions.filter(t=>!t.voided));
+    renderDashboard(txns, txns);
   };
 
   function renderDashboard(txns, allNonVoided) {
@@ -195,12 +196,12 @@
 
     // Hourly chart — fixed: iterate 8–21 as integers
     const hours = [];
-    for (let h=8; h<=21; h++) hours.push(h);
+    for (let h=0; h<24; h++) hours.push(h);
     const hourVals = hours.map(h => hourlyRev[h]||0);
     const maxH = Math.max(...hourVals, 0.01);
     document.getElementById('hourly-chart').innerHTML = hours.map((h,i) => {
       const pct = Math.round((hourVals[i]/maxH)*100);
-      const lbl = h < 12 ? h+'am' : h===12 ? '12pm' : (h-12)+'pm';
+      const lbl = h === 0 ? '12am' : h < 12 ? h+'am' : h===12 ? '12pm' : (h-12)+'pm';
       const hasData = hourVals[i] > 0;
       return `<div class="hbar-wrap" title="${lbl}: $${hourVals[i].toFixed(2)} (${hourlyCount[h]||0} txns)">
         <div class="hbar-amt">${hasData?'$'+hourVals[i].toFixed(0):''}</div>
@@ -230,37 +231,99 @@
     document.getElementById('live-dot').style.background = '#4caf7d';
   }
 
-  // Real-time listener — fetch last 60 days only to limit Firestore reads
-  function startListener(ordered) {
-    const cutoff = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
-    const q = ordered
-      ? query(collection(db,'transactions'), where('timestamp','>=',cutoff), orderBy('timestamp','desc'))
-      : query(collection(db,'transactions'), where('timestamp','>=',cutoff));
-
-    onSnapshot(q, snapshot => {
-      allTransactions = [];
-      snapshot.forEach(docSnap => {
-        allTransactions.push({ _firebaseId: docSnap.id, ...docSnap.data() });
-      });
-      document.getElementById('live-dot').style.background = '#4caf7d';
-      document.getElementById('error-banner').style.display = 'none';
+  let listenerDate=null,stopSalesListener=null,listenerGeneration=0;
+  function startListener(){
+    const date=getDateFilter(),generation=++listenerGeneration;
+    listenerDate=date;if(stopSalesListener)stopSalesListener();
+    allTransactions=[];renderDashboard([],[]);
+    document.getElementById('last-updated').textContent='Loading selected day…';
+    const q=query(collection(db,'transactions'),where('date','==',date));
+    stopSalesListener=onSnapshot(q,snapshot=>{
+      if(generation!==listenerGeneration)return;
+      allTransactions=snapshot.docs.map(d=>({_firebaseId:d.id,...d.data()}));
+      document.getElementById('error-banner').style.display='none';
       window.refreshDashboard();
-    }, err => {
-      console.error('Snapshot error:', err.code, err.message);
-      if (ordered && (err.code === 'failed-precondition' || err.code === 'unimplemented')) {
-        // Index not built yet — retry without orderBy
-        console.warn('Index not ready, retrying without orderBy...');
-        startListener(false);
-      } else {
-        document.getElementById('live-dot').style.background = '#e05050';
-        document.getElementById('last-updated').textContent = 'Not connected';
-        const banner = document.getElementById('error-banner');
-        banner.style.display = 'block';
-        banner.textContent = '⚠️ Firebase error: ' + err.code + ' — ' + err.message;
-      }
+    },err=>{
+      if(generation!==listenerGeneration)return;
+      document.getElementById('live-dot').style.background='#e05050';
+      document.getElementById('last-updated').textContent='Not connected';
+      const banner=document.getElementById('error-banner');banner.style.display='block';banner.textContent='Firebase error: '+err.message;
     });
   }
-  startListener(true);
+  startListener();
+  setInterval(()=>{if(!document.getElementById('date-filter').value&&getDateFilter()!==listenerDate)startListener();},60000);
+
+  // History is fetched only on demand. Document cursors handle identical timestamps.
+  let historyFilter=null,historyCursor=null,historyBusy=false,historyCount=0;
+  const sgToday=()=>new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Singapore'});
+  document.getElementById('history-from').value=sgToday();
+  document.getElementById('history-to').value=sgToday();
+  function readHistoryFilter(){
+    const from=document.getElementById('history-from').value,to=document.getElementById('history-to').value;
+    if(!from||!to||from>to)throw new Error('Choose a valid From and To date.');
+    return {from,to,start:new Date(from+'T00:00:00+08:00').toISOString(),end:new Date(to+'T23:59:59.999+08:00').toISOString(),outlet:document.getElementById('history-outlet').value};
+  }
+  function historyQuery(f,cursor,size){
+    const parts=[where('timestamp','>=',f.start),where('timestamp','<=',f.end)];
+    if(f.outlet!=='All')parts.push(where('outlet','==',f.outlet));
+    parts.push(orderBy('timestamp','desc'));
+    if(cursor)parts.push(startAfter(cursor));
+    parts.push(limit(size));return query(collection(db,'transactions'),...parts);
+  }
+  function historyLock(busy){
+    historyBusy=busy;
+    ['history-search','history-export','history-from','history-to','history-outlet'].forEach(id=>document.getElementById(id).disabled=busy);
+    document.getElementById('history-next').disabled=true;
+  }
+  function appendHistory(rows){
+    const tbody=document.getElementById('history-rows');
+    for(const d of rows){
+      const t=d.data(),tr=document.createElement('tr');
+      const cells=[t.txnId||t.id||d.id,(t.date||'')+' '+(t.time||''),t.outlet||'',(t.items||[]).map(i=>i.name+' ×'+i.qty).join(', '),(t.payments||[]).map(p=>p.type+' $'+Number(p.amount).toFixed(2)).join(' + '),'$'+Number(t.total||0).toFixed(2),t.voided?'Voided':'Sale'];
+      cells.forEach(value=>{const td=document.createElement('td');td.textContent=value;tr.appendChild(td);});tbody.appendChild(tr);
+    }
+  }
+  window.searchHistory=async function(next=false){
+    if(historyBusy)return;
+    const status=document.getElementById('history-status');
+    try{
+      const f=next?historyFilter:readHistoryFilter();
+      if(!f)return;
+      historyLock(true);status.textContent='Loading…';
+      const snap=await getDocs(historyQuery(f,next?historyCursor:null,100));
+      if(!next){document.getElementById('history-rows').replaceChildren();historyCount=0;}
+      appendHistory(snap.docs);historyCount+=snap.size;
+      historyFilter=f;historyCursor=snap.docs.at(-1)||historyCursor;
+      status.textContent=historyCount+' transactions loaded · '+f.from+' to '+f.to+' · '+f.outlet+(snap.size<100?' · End of results':'');
+      historyLock(false);document.getElementById('history-next').disabled=snap.size<100;
+    }catch(e){historyLock(false);status.textContent='Could not load history: '+e.message;document.getElementById('history-next').disabled=!historyCursor;}
+  };
+  function csvCell(value){
+    let text=String(value??'');
+    if(/^[=+\-@\t\r]/.test(text))text="'"+text;
+    return '"'+text.replace(/"/g,'""')+'"';
+  }
+  window.exportTransactionHistory=async function(){
+    if(historyBusy)return;
+    const status=document.getElementById('history-status'),nextDisabled=document.getElementById('history-next').disabled;
+    try{
+      const f=readHistoryFilter();
+      if(!confirm('Export every transaction from '+f.from+' to '+f.to+' ('+f.outlet+')? Each fetched transaction uses database reads.'))return;
+      historyLock(true);
+      const lines=[['Database ID','Receipt ID','Date','Time','Timestamp','Outlet','Items','Payments','Subtotal','Discount','Total','Status'].map(csvCell).join(',')];
+      let cursor=null,count=0;
+      while(true){
+        const snap=await getDocs(historyQuery(f,cursor,500));
+        for(const d of snap.docs){const t=d.data();lines.push([d.id,t.txnId||t.id,t.date,t.time,t.timestamp,t.outlet,(t.items||[]).map(i=>i.name+' x'+i.qty).join('; '),(t.payments||[]).map(p=>p.type+': '+p.amount).join('; '),t.subtotal,t.discount,t.total,t.voided?'Voided':'Sale'].map(csvCell).join(','));}
+        count+=snap.size;status.textContent='Exporting: '+count+' transactions…';
+        if(snap.size<500)break;cursor=snap.docs.at(-1);
+      }
+      const url=URL.createObjectURL(new Blob(['\ufeff'+lines.join('\r\n')],{type:'text/csv;charset=utf-8;'}));
+      const a=document.createElement('a');a.href=url;a.download='wtp-transactions-'+f.from+'_'+f.to+'.csv';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+      status.textContent='Exported '+count+' transactions. Voided sales are labelled in Status.';
+    }catch(e){status.textContent='Export failed; no complete file downloaded: '+e.message;}
+    finally{historyLock(false);document.getElementById('history-next').disabled=nextDisabled;}
+  };
 
   // ---- End of Day Stock (the last physical count per outlet — not a live running number) ----
   let reconciliationDocs = []; // newest first
@@ -510,12 +573,12 @@ tr:last-child td{border-bottom:none}
   <span class="filter-label">Date:</span>
   <input class="filter-input" type="date" id="date-filter" onchange="refreshDashboard()">
   <button class="filter-btn" onclick="document.getElementById('date-filter').value='';refreshDashboard()">Today</button>
-  <span class="filter-sep"></span>
+  <button class="filter-btn" onclick="document.getElementById('history-panel').scrollIntoView({behavior:'smooth'})">Transaction History</button><span class="filter-sep"></span>
   <span class="filter-label">Export:</span>
   <input class="filter-input" type="date" id="export-from">
   <span class="filter-label" style="margin:0 -2px">to</span>
   <input class="filter-input" type="date" id="export-to">
-  <button class="filter-btn" id="export-btn" ontouchstart="event.preventDefault();exportSkuCsv()" onclick="exportSkuCsv()">⬇ Export CSV</button>
+  <button class="filter-btn" id="export-btn" ontouchstart="event.preventDefault();exportSkuCsv()" onclick="exportSkuCsv()">⬇ Export SKU totals</button>
   <span class="last-updated" id="last-updated">Connecting…</span>
 </div>
 
@@ -536,7 +599,7 @@ tr:last-child td{border-bottom:none}
   <!-- Hourly chart -->
   <div class="hourly-card">
     <div class="sec-title">Hourly Sales (Net Revenue)</div>
-    <div class="hbar-chart" id="hourly-chart"></div>
+    <div style="overflow-x:auto"><div class="hbar-chart" id="hourly-chart" style="min-width:720px"></div></div>
   </div>
 
   <!-- Breakdowns -->
@@ -583,9 +646,24 @@ tr:last-child td{border-bottom:none}
     </div>
   </div>
 
+  <div class="table-card" id="history-panel">
+    <div class="sec-title">Transaction History · v27</div>
+    <p>Search saved sales by date and outlet. Load 100 at a time, or export all matching sales. Voided transactions are labelled.</p>
+    <div class="filters">
+      <label>From <input class="filter-input" type="date" id="history-from"></label>
+      <label>To <input class="filter-input" type="date" id="history-to"></label>
+      <select class="filter-select" id="history-outlet" aria-label="History outlet"><option>All</option><option>Bedok 216</option><option>Haig Road</option><option>Punggol Coast</option></select>
+      <button class="filter-btn" id="history-search" onclick="searchHistory()">Search</button>
+      <button class="filter-btn" id="history-export" onclick="exportTransactionHistory()">Export transactions CSV</button>
+    </div>
+    <p id="history-status" role="status">Choose dates and press Search. History does not load automatically.</p>
+    <div class="table-wrap"><table><thead><tr><th>Receipt</th><th>Date / Time</th><th>Outlet</th><th>Items</th><th>Payment</th><th>Total</th><th>Status</th></tr></thead><tbody id="history-rows"></tbody></table></div>
+    <button class="filter-btn" id="history-next" onclick="searchHistory(true)" disabled>Load next 100</button>
+  </div>
+
   <!-- Transaction log -->
   <div class="table-card">
-    <div class="sec-title" style="margin-bottom:14px">Transaction Log — Latest 60 <span style="font-size:10px;font-weight:400;text-transform:none;color:var(--text3)">(across all dates)</span></div>
+    <div class="sec-title" style="margin-bottom:14px">Transaction Log — Latest 60 <span style="font-size:10px;font-weight:400;text-transform:none;color:var(--text3)">(selected date and outlet)</span></div>
     <div class="table-wrap">
       <table>
         <thead>
@@ -676,3 +754,4 @@ function dashCheckPin(){
 </script>
 </body>
 </html>
+
