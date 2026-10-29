@@ -11,7 +11,7 @@
 <link rel="manifest" href="manifest.json">
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-  import { getFirestore, collection, query, orderBy, where, limit, startAfter, onSnapshot, doc, updateDoc, getDocs } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+  import { getFirestore, collection, query, orderBy, where, limit, startAfter, onSnapshot, doc, updateDoc, getDocs, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
   const cfg = {
     apiKey:"AIzaSyAPCeTkc3cTqRNIDRhKQcpjrsUcckIUg68",
@@ -107,7 +107,22 @@
       return;
     }
     try {
-      await updateDoc(doc(db, 'transactions', firebaseId), { voided: true, voidedAt: new Date().toISOString() });
+      await runTransaction(db, async tx => {
+        const ref=doc(db,'transactions',firebaseId), snap=await tx.get(ref);
+        if(!snap.exists())throw new Error('Sale not found');
+        const sale=snap.data();if(sale.voided)return;
+        if(sale.sessionId){
+          const sessionRef=doc(db,'registerSessions',sale.sessionId), sessionSnap=await tx.get(sessionRef);
+          if(!sessionSnap.exists()||sessionSnap.data().status!=='open')throw new Error('This sale belongs to a closed session. Its saved Z report cannot be rewritten.');
+          const session=sessionSnap.data(), s=structuredClone(session.summary), cents=n=>Math.round(Number(n)*100);
+          s.count--;s.gross-=cents(sale.subtotal);s.discount-=cents(sale.discount);s.net-=cents(sale.total);
+          for(const i of sale.items)s.sku[i.name]-=i.qty;
+          for(const p of sale.payments){s.pay[p.type]-=cents(p.amount);s.payCount[p.type]--;}
+          s.hours[sale.hour]-=cents(sale.total);s.hourCount[sale.hour]--;
+          tx.set(sessionRef,{...session,summary:s});
+        }
+        tx.update(ref,{voided:true,voidedAt:new Date().toISOString()});
+      });
       closeVoidModal();
       showToast('🗑️', 'Transaction voided: ' + txnId);
     } catch(e) {
@@ -754,4 +769,5 @@ function dashCheckPin(){
 </script>
 </body>
 </html>
+
 
