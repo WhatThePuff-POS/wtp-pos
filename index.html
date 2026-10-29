@@ -11,7 +11,7 @@
 <link rel="manifest" href="manifest.json">
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-  import { getFirestore, collection, addDoc, serverTimestamp, doc, updateDoc, query, where, getDocs, onSnapshot, setDoc, increment } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+  import { getFirestore, collection, addDoc, serverTimestamp, doc, updateDoc, query, where, getDocs, onSnapshot, setDoc, increment, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
   const cfg = {
     apiKey:"AIzaSyAPCeTkc3cTqRNIDRhKQcpjrsUcckIUg68",
     authDomain:"whatthepuff-be1ce.firebaseapp.com",
@@ -34,8 +34,10 @@
   window._onSnapshot = onSnapshot;
   window._setDoc = setDoc;
   window._increment = increment;
+  window._runTransaction = runTransaction;
   window._fbReady = true;
-  setTimeout(()=>{ const d=document.getElementById('sync-dot'); if(d) d.className='sync-dot synced'; },0);
+  window.dispatchEvent(new Event('wtp-firebase-ready'));
+
 
   window._loadTodayTxns = async function(dateStr, outlet, cb){
     try{
@@ -1742,9 +1744,12 @@ function confirmPayment(){
 }
 
 // ============ TRANSACTION ============
-function endTransaction(payments,sundry){
+async function endTransaction(payments,sundry){
+  if(!regCanSell())return;
   if(paymentInFlight) return;
   paymentInFlight=true;
+  document.getElementById('app').inert=true;
+  document.getElementById('payment-modal').inert=true;
   try{
     const cashApplied=payments.filter(p=>p.type==='cash').reduce((sum,p)=>sum+Math.round(p.amount*100),0);
     const cashTendered=cashApplied>0?Math.round(Number(cashGiven)*100):null;
@@ -1753,13 +1758,13 @@ function endTransaction(payments,sundry){
     }
     txnCounter++;
     const now=new Date();
-    const txnId='TXN'+String(txnCounter).padStart(4,'0');
+    const txnId='TXN-'+crypto.randomUUID().slice(0,8).toUpperCase();
     const sundryAmt=sundry||0;
     const txn={
       id:txnId,
-      date:now.toLocaleDateString('en-SG',{day:'2-digit',month:'short',year:'numeric'}),
-      time:now.toLocaleTimeString('en-SG',{hour:'2-digit',minute:'2-digit',second:'2-digit'}),
-      hour:now.getHours(),
+      date:now.toLocaleDateString('en-SG',{timeZone:'Asia/Singapore',day:'2-digit',month:'short',year:'numeric'}),
+      time:now.toLocaleTimeString('en-SG',{timeZone:'Asia/Singapore',hour:'2-digit',minute:'2-digit',second:'2-digit'}),
+      hour:Number(new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Singapore',hour:'2-digit',hourCycle:'h23'}).format(now)),
       outlet:currentOutlet,
       items:Object.values(cart).map(({sku,qty})=>({name:sku.name,qty,price:sku.price,sub:sku.price*qty})),
       subtotal:getSubtotal(),
@@ -1771,10 +1776,8 @@ function endTransaction(payments,sundry){
       ...(sundryAmt>0&&{sundry:sundryAmt}),
       timestamp:now.toISOString()
     };
-    transactions.push(txn);
-    lastReceipt=txn;
-    saveToSession(txn);
-    saveToCloud(txn);
+    const saved=await regPersist(txn);
+    lastReceipt=saved;
     applyInventoryForSale(cart);
     closePayment();
     clearCart();
@@ -1787,8 +1790,13 @@ function endTransaction(payments,sundry){
     const oc=document.getElementById('order-complete');
     oc.classList.add('open');
     // Keep totals and change visible until the cashier dismisses them.
+  } catch(e){
+    showToast('⚠️','Sale not completed: '+e.message);
+    splitPayments=[];remainingDue=getTotal();
   } finally {
     paymentInFlight=false;
+    document.getElementById('app').inert=false;
+    document.getElementById('payment-modal').inert=false;
   }
 }
 
@@ -2079,7 +2087,7 @@ function testReportPrinter(){
 function buildReportText(type,now,d){
   const w=printerConfig().width===48?48:32,row=(a,b)=>reportRow(a,b,w),rule='-'.repeat(w);
   const lines=['WHAT THE PUFF!',type+'-REPORT',wrapReportLine(d.outlet,w),
-    now.toLocaleDateString('en-SG')+' '+now.toLocaleTimeString('en-SG',{hour:'2-digit',minute:'2-digit',hour12:false}),
+    now.toLocaleDateString('en-SG')+' '+now.toLocaleTimeString('en-SG',{timeZone:'Asia/Singapore',hour:'2-digit',minute:'2-digit',hour12:false}),
     rule,'REVENUE SUMMARY',row('Transactions',d.txnCount),
     row('Gross Revenue',fmt(d.grossRev)),row('Senior Discounts','-'+fmt(d.discountTotal)),
     row('Net Revenue',fmt(d.netRev)),rule,'SALES BY SKU (before discounts)'];
@@ -2097,7 +2105,7 @@ function buildReportText(type,now,d){
 }
 function buildReportHTML(type,now,isZ,d){
   reportPrintSnapshot={type,text:buildReportText(type,now,d)};
-  const dtStr=now.toLocaleDateString('en-SG',{day:'2-digit',month:'short',year:'numeric'})+' '+now.toLocaleTimeString('en-SG',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  const dtStr=now.toLocaleDateString('en-SG',{timeZone:'Asia/Singapore',day:'2-digit',month:'short',year:'numeric'})+' '+now.toLocaleTimeString('en-SG',{timeZone:'Asia/Singapore',hour:'2-digit',minute:'2-digit',second:'2-digit'});
   const skuRows=SKUS.map(s=>`<div class="report-row"><span class="rl">${s.name}</span><span class="rv">${d.skuQty[s.name]||0} pcs · ${fmt((d.skuQty[s.name]||0)*s.price)}</span></div>`).join('');
   const payRows=['cash','paynow','cdc','voucher','sundry'].filter(p=>p!=='sundry'||(d.payTotals.sundry||0)>0).map(p=>`<div class="report-row"><span class="rl">${p.charAt(0).toUpperCase()+p.slice(1)}</span><span class="rv">${fmt(d.payTotals[p]||0)} (${d.payCount[p]||0})</span></div>`).join('');
   // Hourly bars: fix — use actual hour integers
@@ -2165,7 +2173,7 @@ function showToast(icon,msg){
 renderAll();
 
 // ============ SERVICE WORKER ============
-if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
+if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js',{updateViaCache:'none'});
 
 // ============ WAKE LOCK ============
 document.addEventListener('visibilitychange',()=>{
@@ -2174,29 +2182,7 @@ document.addEventListener('visibilitychange',()=>{
   }
 });
 
-// ============ OFFLINE SYNC ============
-window.addEventListener('online', async function(){
-  const queued=JSON.parse(localStorage.getItem('wtp_txns')||'[]');
-  if(!queued.length) return;
-  showToast('📶','Syncing '+queued.length+' offline transaction(s)…');
-  const failed=[];
-  for(const txn of queued){
-    try{
-      if(!window._fbReady) throw new Error('not ready');
-      await window._addDoc(window._collection(window._db,'transactions'),{
-        txnId:txn.id, date:txn.date, time:txn.time, hour:txn.hour,
-        outlet:txn.outlet, items:txn.items, subtotal:txn.subtotal,
-        discount:txn.discount, total:txn.total, payments:txn.payments,
-        discountType:txn.discountType, timestamp:txn.timestamp,
-        voided:false, createdAt:window._serverTimestamp()
-      });
-    } catch(e){ failed.push(txn); }
-  }
-  localStorage.setItem('wtp_txns',JSON.stringify(failed));
-  setSyncStatus(failed.length?'':'synced');
-  showToast(failed.length?'⚠️':'✅', failed.length?failed.length+' transaction(s) still pending':'All transactions synced');
-});
-
+// Sales sync is handled durably by register-core.js. Inventory queues remain separate.
 window.addEventListener('online', async function(){
   const adjQueue=JSON.parse(localStorage.getItem('wtp_stock_adj')||'[]');
   const failedAdj=[];
@@ -2223,6 +2209,8 @@ window.addEventListener('online', async function(){
   localStorage.setItem('wtp_stock_set',JSON.stringify(failedSet));
 });
 </script>
+<script src="register-core.js?v=2"></script>
+<script src="register-ui.js?v=2"></script>
 </body>
 </html>
 
