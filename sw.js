@@ -1,4 +1,4 @@
-const CACHE = 'wtp-v27-history-24hours';
+const CACHE = 'wtp-v28-outlet-reports';
 const SHELL = ['index.html', 'dashboard.html', 'logo.png'];
 
 self.addEventListener('install', e => {
