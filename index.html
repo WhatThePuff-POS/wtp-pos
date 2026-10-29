@@ -37,14 +37,14 @@
   window._fbReady = true;
   setTimeout(()=>{ const d=document.getElementById('sync-dot'); if(d) d.className='sync-dot synced'; },0);
 
-  window._loadTodayTxns = async function(dateStr, cb){
+  window._loadTodayTxns = async function(dateStr, outlet, cb){
     try{
-      const q = query(collection(db,'transactions'), where('date','==',dateStr));
+      const q = query(collection(db,'transactions'), where('date','==',dateStr), where('outlet','==',outlet));
       const snap = await getDocs(q);
       const txns=[];
       snap.forEach(d=>{
         const data=d.data();
-        if(!data.voided) txns.push({_firebaseId:d.id, id:data.txnId, ...data});
+        if(!data.voided && data.outlet===outlet) txns.push({_firebaseId:d.id, id:data.txnId, ...data});
       });
       cb(null, txns);
     } catch(e){ cb(e,[]); }
@@ -453,6 +453,11 @@ html,body{height:100%;background:#1a1a1a;font-family:'Segoe UI',system-ui,sans-s
 .oc-total{font-size:16px;color:var(--text);font-family:monospace}
 .oc-print-btn{padding:10px 22px;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--radius);color:var(--text2);font-size:13px;cursor:pointer;transition:all 0.1s}
 .oc-print-btn:hover{border-color:var(--amber-dim);color:var(--amber)}
+/* Keep every action visible within the cashier panel, including long outlet names. */
+.topbar{height:auto;min-height:52px;flex-wrap:wrap;padding:8px 10px}
+.topbar .nav-btns{flex:0 0 100%;min-width:0;flex-wrap:wrap;justify-content:flex-end}
+.topbar .nav-btn{flex-shrink:0;min-height:36px}
+.topbar .outlet-display{max-width:100%;white-space:normal}
 </style>
 </head>
 <body>
@@ -773,23 +778,28 @@ let sessionInvLog=[];        // {type:'in'|'waste',itemName,qty,unit,detail,time
 
 // ============ SESSION PERSISTENCE (crash recovery) ============
 function _lsAvailable(){try{localStorage.setItem('__t','1');localStorage.removeItem('__t');return true;}catch(e){return false;}}
+function sessionKey(outlet){return 'wtp_session_outlet_'+encodeURIComponent(outlet);}
+let outletLoadGeneration=0, outletSalesLoading=false;
 function saveToSession(txn){
   if(!_lsAvailable()){showToast('⚠️','Private Browsing — transactions will not persist locally');return;}
   try{
-    const raw=localStorage.getItem('wtp_session');
+    const raw=localStorage.getItem(sessionKey(txn.outlet));
     const arr=raw?JSON.parse(raw):[];
     const idx=arr.findIndex(t=>t.id===txn.id);
     if(idx>=0) arr[idx]=txn; else arr.push(txn);
-    localStorage.setItem('wtp_session',JSON.stringify(arr));
+    localStorage.setItem(sessionKey(txn.outlet),JSON.stringify(arr));
   }catch(e){showToast('⚠️','Could not save transaction locally');}
 }
 function restoreFromSession(){
   if(!_lsAvailable()) return false;
   try{
-    const raw=localStorage.getItem('wtp_session');
+    const raw=localStorage.getItem(sessionKey(currentOutlet)) || localStorage.getItem('wtp_session');
     if(!raw) return false;
-    const arr=JSON.parse(raw);
-    if(!Array.isArray(arr)||!arr.length) return false;
+    const saved=JSON.parse(raw);
+    if(!Array.isArray(saved)) return false;
+    const arr=saved.filter(t=>t.outlet===currentOutlet && !t.voided);
+    if(!arr.length) return false;
+    localStorage.setItem(sessionKey(currentOutlet),JSON.stringify(arr));
     transactions=arr;
     arr.forEach(t=>{
       const m=(t.txnId||t.id||'').match(/TXN(\d+)/);
@@ -801,7 +811,41 @@ function restoreFromSession(){
   }catch(e){return false;}
 }
 function clearSession(){
-  try{localStorage.removeItem('wtp_session');}catch(e){}
+  try{
+    localStorage.removeItem(sessionKey(currentOutlet));
+    const legacy=JSON.parse(localStorage.getItem('wtp_session')||'[]');
+    if(Array.isArray(legacy)) localStorage.setItem('wtp_session',JSON.stringify(legacy.filter(t=>t.outlet!==currentOutlet)));
+  }catch(e){}
+}
+
+function loadOutletSession(){
+  const outlet=currentOutlet, generation=++outletLoadGeneration;
+  outletSalesLoading=false;
+  transactions=[];txnCounter=0;lastReceipt=null;statsUnlocked=false;
+  reportPrintSnapshot=null;sessionInvLog=[];
+  updateTopbarStats();
+  const restoredLocally=restoreFromSession();
+  if(!restoredLocally&&window._loadTodayTxns){
+    const today=new Date().toLocaleDateString('en-SG',{day:'2-digit',month:'short',year:'numeric'});
+    outletSalesLoading=true;
+    window._loadTodayTxns(today,outlet,function(err,txns){
+      if(generation!==outletLoadGeneration || outlet!==currentOutlet) return;
+      outletSalesLoading=false;
+      if(err){showToast('⚠️','Could not restore outlet sales. Check connection before reporting.');return;}
+      const restored=txns.filter(t=>t.outlet===outlet && !t.voided);
+      // Retain any sales completed while the cloud request was in flight.
+      const merged=new Map(restored.map(t=>[t.txnId||t.id,t]));
+      transactions.forEach(t=>merged.set(t.txnId||t.id,t));
+      transactions=Array.from(merged.values());
+      transactions.forEach(t=>{
+        const m=(t.txnId||t.id||'').match(/TXN(\d+)/);
+        if(m) txnCounter=Math.max(txnCounter,parseInt(m[1]));
+        saveToSession(t);
+      });
+      updateTopbarStats();
+      if(restored.length) showToast('🔄','Restored '+restored.length+' transaction(s) for '+outlet);
+    });
+  }
 }
 
 // ============ LOGIN ============
@@ -831,22 +875,7 @@ function checkPin(){
     updateTxnDisplay();
     updateTopbarStats();
     if('wakeLock' in navigator) navigator.wakeLock.request('screen').then(wl=>window._wakeLock=wl).catch(()=>{});
-    const restoredLocally=restoreFromSession();
-    if(!restoredLocally&&window._loadTodayTxns){
-      const today=new Date().toLocaleDateString('en-SG',{day:'2-digit',month:'short',year:'numeric'});
-      window._loadTodayTxns(today,function(err,txns){
-        if(!err&&txns.length){
-          transactions=txns;
-          txns.forEach(t=>{
-            const m=(t.txnId||t.id||'').match(/TXN(\d+)/);
-            if(m) txnCounter=Math.max(txnCounter,parseInt(m[1]));
-          });
-          txns.forEach(t=>saveToSession(t));
-          updateTopbarStats();
-          showToast('🔄','Restored '+txns.length+' transaction(s) from cloud');
-        }
-      });
-    }
+    loadOutletSession();
   } else {
     document.getElementById('pin-error').textContent='Incorrect PIN. Try again.';
     pinEntry='';
@@ -900,9 +929,11 @@ function checkAdminPin(){
       btn.style.cssText='padding:14px;border-radius:8px;font-size:15px;cursor:pointer;touch-action:manipulation;font-family:inherit;width:100%;border:1px solid '+(active?'#e8a020':'#484848')+';background:'+(active?'#2a2010':'#2e2e2e')+';color:'+(active?'#f5c060':'#f0ede8');
       btn.ontouchstart=function(e){e.preventDefault();btn.click();};
       btn.onclick=function(){
+        if(o===currentOutlet){closeAdminModal();return;}
         currentOutlet=o;
         document.getElementById('outlet-name-display').textContent=o;
         localStorage.setItem('wtp_outlet',o);
+        loadOutletSession();
         subscribeStockLevels();
         closeAdminModal();
         showToast('📍','Outlet: '+o);
@@ -951,7 +982,7 @@ function updateTopbarStats(){
   if(!el) return;
   if(!statsUnlocked){el.textContent='🔒 Sales';return;}
   const today=new Date().toLocaleDateString('en-SG',{day:'2-digit',month:'short',year:'numeric'});
-  const todayTxns=transactions.filter(t=>t.date===today);
+  const todayTxns=transactions.filter(t=>t.date===today && t.outlet===currentOutlet && !t.voided);
   const net=todayTxns.reduce((s,t)=>s+t.total,0);
   el.textContent=todayTxns.length+'txn · '+fmt(net);
 }
@@ -1541,6 +1572,7 @@ function removeDiscount(){
 
 // ============ PAYMENT ============
 function quickPay(method){
+  if(outletSalesLoading){showToast('⏳','Loading outlet sales. Please try again shortly.');return;}
   if(!Object.keys(cart).length||paymentInFlight) return;
   splitPayments=[];remainingDue=getTotal();
   if(method==='paynow'){
@@ -1968,6 +2000,7 @@ function reprintLast(){
 
 // ============ REPORTS ============
 function buildReportData(){
+  const outletTransactions=transactions.filter(t=>t.outlet===currentOutlet && !t.voided);
   const skuQty={};SKUS.forEach(s=>skuQty[s.name]=0);
   const payTotals={cash:0,paynow:0,cdc:0,voucher:0,sundry:0};
   const payCount={cash:0,paynow:0,cdc:0,voucher:0,sundry:0};
@@ -1975,7 +2008,7 @@ function buildReportData(){
   // Hourly: store revenue AND count by hour
   const hourlyRev={};
   const hourlyCount={};
-  transactions.forEach(t=>{
+  outletTransactions.forEach(t=>{
     grossRev+=t.subtotal;
     discountTotal+=t.discount;
     t.items.forEach(i=>{if(skuQty[i.name]!==undefined)skuQty[i.name]+=i.qty;});
@@ -1984,14 +2017,16 @@ function buildReportData(){
     hourlyRev[h]=(hourlyRev[h]||0)+t.total;
     hourlyCount[h]=(hourlyCount[h]||0)+1;
   });
-  return{outlet:currentOutlet,skuQty,payTotals,payCount,grossRev,discountTotal,netRev:grossRev-discountTotal,hourlyRev,hourlyCount,txnCount:transactions.length};
+  return{outlet:currentOutlet,skuQty,payTotals,payCount,grossRev,discountTotal,netRev:grossRev-discountTotal,hourlyRev,hourlyCount,txnCount:outletTransactions.length};
 }
 function openXReport(){
+  if(outletSalesLoading){showToast('⏳','Loading outlet sales. Please try again shortly.');return;}
   const now=new Date();
   document.getElementById('report-content').innerHTML=buildReportHTML('X',now,false,buildReportData());
   document.getElementById('report-modal').classList.add('open');
 }
 function openZReport(){
+  if(outletSalesLoading){showToast('⏳','Loading outlet sales. Please try again shortly.');return;}
   const d=buildReportData();
   document.getElementById('zconfirm-stats').innerHTML=`
     <div style="display:flex;justify-content:space-between;width:100%;font-size:13px;color:var(--text2)"><span>Transactions today</span><span style="font-family:monospace;color:var(--text)">${d.txnCount}</span></div>
@@ -2102,6 +2137,7 @@ function buildReportHTML(type,now,isZ,d){
     </div>`;
 }
 function reopenTerminal(){
+  ++outletLoadGeneration;
   clearSession();
   transactions=[];txnCounter=0;splitPayments=[];lastReceipt=null;
   statsUnlocked=false;
@@ -2189,3 +2225,4 @@ window.addEventListener('online', async function(){
 </script>
 </body>
 </html>
+
