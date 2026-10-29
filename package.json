@@ -1,0 +1,11 @@
+{
+  "name": "wtp-pos-register-tests",
+  "private": true,
+  "scripts": {
+    "test": "node test-core.cjs && node test-browser.cjs"
+  },
+  "devDependencies": {
+    "jsdom": "30.1.3",
+    "fake-indexeddb": "6.2.6"
+  }
+}
