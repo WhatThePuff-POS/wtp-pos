@@ -38,6 +38,50 @@
 
   // Pivot CSV: one row per date+outlet, one column per SKU. Queried fresh for the chosen
   // range via a one-off getDocs() (not the live 60-day listener) so any date range works.
+  function buildSkuExport(txns) {
+    const sales = txns.filter(t => !t.voided);
+    const itemName = i => String(i.name || '').trim() || 'Unspecified item';
+    const extraNames = [...new Set(sales.flatMap(t => (t.items || []).map(itemName)))]
+      .filter(name => !SKU_NAMES.includes(name)).sort((a,b) => a.localeCompare(b));
+    const names = [...SKU_NAMES, ...extraNames];
+    const makeRow = (date, outlet) => ({date, outlet, qty: new Map(), puffQty:0, otherQty:0, puffGross:0, otherGross:0, net:0});
+    const rows = new Map();
+    const total = makeRow('TOTAL', 'All outlets');
+    for (const t of sales) {
+      const key = JSON.stringify([t.date, t.outlet]);
+      if (!rows.has(key)) rows.set(key, makeRow(t.date, t.outlet));
+      const row = rows.get(key);
+      let gross = 0;
+      for (const i of t.items || []) {
+        const name = itemName(i), qty = Number(i.qty) || 0;
+        const amount = typeof i.sub === 'number' ? i.sub : qty * (Number(i.price) || 0);
+        const puff = SKU_NAMES.includes(name);
+        gross += amount;
+        for (const r of [row, total]) {
+          r.qty.set(name, (r.qty.get(name) || 0) + qty);
+          r[puff ? 'puffQty' : 'otherQty'] += qty;
+          r[puff ? 'puffGross' : 'otherGross'] += amount;
+        }
+      }
+      const net = typeof t.total === 'number' ? t.total : gross - (Number(t.discount) || 0);
+      row.net += net; total.net += net;
+    }
+    const rank = o => { const i = INV_OUTLETS.indexOf(o); return i < 0 ? 99 : i; };
+    const list = [...rows.values()].sort((a,b) => new Date(a.date)-new Date(b.date) || rank(a.outlet)-rank(b.outlet) || String(a.outlet).localeCompare(String(b.outlet)));
+    const pct = (n,d) => (d ? n/d*100 : 0).toFixed(2) + '%';
+    const values = r => {
+      const units = r.puffQty+r.otherQty, gross = r.puffGross+r.otherGross;
+      return [r.date,r.outlet,...names.map(n=>r.qty.get(n)||0),r.puffQty,r.otherQty,units,
+        pct(r.puffQty,units),pct(r.otherQty,units),r.puffGross.toFixed(2),r.otherGross.toFixed(2),
+        pct(r.puffGross,gross),pct(r.otherGross,gross),gross.toFixed(2),r.net.toFixed(2)];
+    };
+    const header = ['Date','Outlet',...names,'Puff Units','Non-puff Units','Total Units',
+      'Puff Unit Mix %','Non-puff Unit Mix %','Puff Gross Sales ($)','Non-puff Gross Sales ($)',
+      'Puff Revenue Mix % (gross)','Non-puff Revenue Mix % (gross)','Total Gross Sales ($)','Total Net Revenue ($)'];
+    const escape = v => '"' + String(v).replace(/"/g,'""').replace(/^[=+@-]/, match => "'" + match) + '"';
+    return {count:list.length, csv:[header,...list.map(values),...(list.length?[values(total)]:[])].map(r=>r.map(escape).join(',')).join('\r\n')};
+  }
+
   window.exportSkuCsv = async function() {
     const fromStr = document.getElementById('export-from').value;
     const toStr = document.getElementById('export-to').value;
@@ -60,29 +104,8 @@
       const txns = [];
       snap.forEach(d => txns.push(d.data()));
 
-      const rows = {}; // key: date|||outlet -> { date, outlet, skuQty:{...}, other, revenue }
-      txns.filter(t => !t.voided).forEach(t => {
-        const key = t.date + '|||' + t.outlet;
-        if (!rows[key]) {
-          rows[key] = { date: t.date, outlet: t.outlet, skuQty: {}, other: 0, revenue: 0 };
-          SKU_NAMES.forEach(s => rows[key].skuQty[s] = 0);
-        }
-        (t.items || []).forEach(i => {
-          rows[key].revenue += (typeof i.sub === 'number' ? i.sub : i.qty * i.price);
-          if (SKU_NAMES.includes(i.name)) rows[key].skuQty[i.name] += i.qty;
-          else rows[key].other += i.qty;
-        });
-      });
-
-      const outletRank = o => { const idx = INV_OUTLETS.indexOf(o); return idx === -1 ? 99 : idx; };
-      const list = Object.values(rows).sort((a, b) =>
-        a.date === b.date ? outletRank(a.outlet) - outletRank(b.outlet) : new Date(a.date) - new Date(b.date));
-
-      const header = ['Date', 'Outlet', ...SKU_NAMES, 'Other', 'Total Revenue ($)'];
-      const csvLines = [header.join(',')];
-      list.forEach(r => csvLines.push([r.date, r.outlet, ...SKU_NAMES.map(s => r.skuQty[s]), r.other, r.revenue.toFixed(2)].join(',')));
-
-      const blob = new Blob([csvLines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+      const result = buildSkuExport(txns);
+      const blob = new Blob(['\uFEFF', result.csv], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -91,7 +114,7 @@
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      showToast('✅', 'Exported ' + list.length + ' row(s)');
+      showToast('✅', 'Exported ' + result.count + ' row(s)');
     } catch (e) {
       showToast('⚠️', 'Export failed: ' + e.message);
     } finally {

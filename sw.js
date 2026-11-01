@@ -1,4 +1,4 @@
-const CACHE = 'wtp-v28-outlet-reports';
+const CACHE = 'wtp-v29-sku-sales-mix';
 const SHELL = ['index.html', 'dashboard.html', 'logo.png'];
 
 self.addEventListener('install', e => {
