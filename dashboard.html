@@ -78,8 +78,8 @@
     const header = ['Date','Outlet',...names,'Puff Units','Non-puff Units','Total Units',
       'Puff Unit Mix %','Non-puff Unit Mix %','Puff Gross Sales ($)','Non-puff Gross Sales ($)',
       'Puff Revenue Mix % (gross)','Non-puff Revenue Mix % (gross)','Total Gross Sales ($)','Total Net Revenue ($)'];
-    const escape = v => '"' + String(v).replace(/"/g,'""').replace(/^[=+@\\-]/, "'  window.exportSkuCsv = async function() {") + '"';
-    return {count:list.length, csv:[header,...list.map(values),...(list.length?[values(total)]:[])].map(r=>r.map(escape).join(',')).join('\\r\\n')};
+    const escape = v => '"' + String(v).replace(/"/g,'""').replace(/^[=+@-]/, match => "'" + match) + '"';
+    return {count:list.length, csv:[header,...list.map(values),...(list.length?[values(total)]:[])].map(r=>r.map(escape).join(',')).join('\r\n')};
   }
 
   window.exportSkuCsv = async function() {
