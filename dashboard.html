@@ -11,7 +11,7 @@
 <link rel="manifest" href="manifest.json">
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-  import { getFirestore, collection, query, orderBy, where, limit, startAfter, onSnapshot, doc, updateDoc, getDocs } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+  import { getFirestore, collection, query, orderBy, where, limit, startAfter, onSnapshot, doc, updateDoc, getDocs, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
   const cfg = {
     apiKey:"AIzaSyAPCeTkc3cTqRNIDRhKQcpjrsUcckIUg68",
@@ -123,6 +123,53 @@
     }
   };
 
+  const voidSelection=new Map(),voidRows=new Map();let bulkBusy=false,bulkTargets=[];
+  let selectionFilter='';
+  function updateVoidSelection(){
+    document.querySelectorAll('.bulk-void-button').forEach(b=>{b.textContent='Void selected ('+voidSelection.size+')';b.disabled=bulkBusy||!voidSelection.size;});
+    document.querySelectorAll('input[data-void-id]').forEach(b=>{b.checked=voidSelection.has(b.dataset.voidId);b.disabled=bulkBusy;});
+    document.querySelectorAll('input[data-void-group]').forEach(b=>{const rows=[...document.getElementById(b.dataset.voidGroup).querySelectorAll('input[data-void-id]')];const n=rows.filter(x=>x.checked).length;b.checked=rows.length>0&&n===rows.length;b.indeterminate=n>0&&n<rows.length;b.disabled=bulkBusy||!rows.length;});
+  }
+  function clearVoidSelection(){voidSelection.clear();updateVoidSelection();}
+  window.selectVoidRow=function(id,checked){
+    if(bulkBusy)return;
+    if(checked){if(voidSelection.size>=400){showToast('⚠️','Select up to 400 transactions at a time');updateVoidSelection();return;}const row=voidRows.get(id);if(row&&!row.voided)voidSelection.set(id,{...row});}
+    else voidSelection.delete(id);updateVoidSelection();
+  };
+  window.selectVisibleVoids=function(tbodyId,checked){
+    document.getElementById(tbodyId).querySelectorAll('input[data-void-id]').forEach(b=>window.selectVoidRow(b.dataset.voidId,checked));updateVoidSelection();
+  };
+  window.clearVoidSelection=clearVoidSelection;
+  function selectionCell(id,t){
+    voidRows.set(id,{...t,_firebaseId:id});const td=document.createElement('td');
+    if(!t.voided){const cb=document.createElement('input');cb.type='checkbox';cb.dataset.voidId=id;cb.setAttribute('aria-label','Select '+(t.txnId||id)+' '+t.outlet);cb.checked=voidSelection.has(id);cb.onchange=()=>window.selectVoidRow(id,cb.checked);td.appendChild(cb);}return td;
+  }
+  window.openBulkVoid=function(){
+    if(bulkBusy||!voidSelection.size)return;
+    bulkTargets=[...voidSelection.values()];const sum=bulkTargets.reduce((n,t)=>n+Number(t.total||0),0);
+    const box=document.getElementById('void-sub');box.textContent='Void '+bulkTargets.length+' transactions totalling $'+sum.toFixed(2)+'?\n'+bulkTargets.map(t=>(t.txnId||t.id||t._firebaseId)+' · '+t.outlet+' · '+t.date+' '+(t.time||'')+' · $'+Number(t.total||0).toFixed(2)).join('\n');box.style.whiteSpace='pre-line';box.style.maxHeight='260px';box.style.overflowY='auto';
+    document.getElementById('void-pin-input').value='';document.getElementById('void-pin-error').textContent='';
+    document.getElementById('void-confirm-btn').textContent='Void selected';document.getElementById('void-confirm-btn').onclick=()=>window.confirmBulkVoid();document.getElementById('void-overlay').classList.add('open');
+  };
+  window.confirmBulkVoid=async function(){
+    if(bulkBusy||!bulkTargets.length)return;
+    const err=document.getElementById('void-pin-error');
+    if(document.getElementById('void-pin-input').value.trim()!=='9999'){err.textContent='Wrong admin PIN.';return;}
+    if(!navigator.onLine){err.textContent='Reconnect before voiding sales.';return;}
+    const targets=bulkTargets.map(t=>({...t}));bulkBusy=true;updateVoidSelection();document.getElementById('void-confirm-btn').disabled=true;
+    try{
+      const batch=writeBatch(db),at=new Date().toISOString();
+      for(const t of targets)batch.update(doc(db,'transactions',t._firebaseId),{voided:true,voidedAt:at});
+      await batch.commit();
+      const ids=new Set(targets.map(t=>t._firebaseId));
+      allTransactions=allTransactions.map(t=>ids.has(t._firebaseId)?{...t,voided:true}:t);
+      for(const id of ids){voidSelection.delete(id);const row=voidRows.get(id);if(row)row.voided=true;}
+      document.querySelectorAll('#history-rows tr').forEach(tr=>{const cb=tr.querySelector('input[data-void-id]');if(cb&&ids.has(cb.dataset.voidId)){tr.lastElementChild.textContent='Voided';cb.remove();}});
+      closeVoidModal();window.refreshDashboard();showToast('✅',targets.length+' transactions voided');
+    }catch(e){err.textContent='No batch confirmed: '+e.message+'. Selection kept for retry.';}
+    finally{bulkBusy=false;document.getElementById('void-confirm-btn').disabled=false;updateVoidSelection();}
+  };
+
   window.voidTransaction = async function(firebaseId, txnId) {
     const pin = document.getElementById('void-pin-input').value.trim();
     if (pin !== '9999') {
@@ -151,6 +198,8 @@
   }
 
   window.refreshDashboard = function() {
+    const fingerprint=getDateFilter()+'|'+document.getElementById('outlet-filter').value;
+    if(fingerprint!==selectionFilter){selectionFilter=fingerprint;clearVoidSelection();}
     const dateStr = getDateFilter();
     if(dateStr!==listenerDate){startListener();return;}
     const outlet = document.getElementById('outlet-filter').value;
@@ -248,8 +297,12 @@
         <td class="td-total">$${t.total.toFixed(2)}</td>
         <td><button class="void-btn" onclick="openVoidModal('${t._firebaseId}','${t.txnId||t.id||''}')">Void</button></td>
       </tr>`).join('') ||
-      '<tr><td colspan="7" class="td-empty">No transactions for selected filters</td></tr>';
+      '<tr><td colspan="8" class="td-empty">No transactions for selected filters</td></tr>';
 
+    const liveIds=new Set(logTxns.map(t=>t._firebaseId));
+    document.querySelectorAll('#txn-log tr').forEach((tr,i)=>{if(logTxns[i])tr.prepend(selectionCell(logTxns[i]._firebaseId,logTxns[i]));});
+    for(const [id,t] of voidSelection){const fresh=allTransactions.find(x=>x._firebaseId===id);const inHistory=[...document.querySelectorAll('#history-rows input[data-void-id]')].some(b=>b.dataset.voidId===id);if(fresh?.voided||(!liveIds.has(id)&&!inHistory))voidSelection.delete(id);}
+    updateVoidSelection();
     document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleTimeString('en-SG',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
     document.getElementById('live-dot').style.background = '#4caf7d';
   }
@@ -301,9 +354,9 @@
   function appendHistory(rows){
     const tbody=document.getElementById('history-rows');
     for(const d of rows){
-      const t=d.data(),tr=document.createElement('tr');
+      const t=d.data(),tr=document.createElement('tr');tr.appendChild(selectionCell(d.id,t));
       const cells=[t.txnId||t.id||d.id,(t.date||'')+' '+(t.time||''),t.outlet||'',(t.items||[]).map(i=>i.name+' ×'+i.qty).join(', '),(t.payments||[]).map(p=>p.type+' $'+Number(p.amount).toFixed(2)).join(' + '),'$'+Number(t.total||0).toFixed(2),t.voided?'Voided':'Sale'];
-      cells.forEach(value=>{const td=document.createElement('td');td.textContent=value;tr.appendChild(td);});tbody.appendChild(tr);
+      cells.forEach(value=>{const td=document.createElement('td');td.textContent=value;tr.appendChild(td);});tbody.appendChild(tr);updateVoidSelection();
     }
   }
   window.searchHistory=async function(next=false){
@@ -314,7 +367,7 @@
       if(!f)return;
       historyLock(true);status.textContent='Loading…';
       const snap=await getDocs(historyQuery(f,next?historyCursor:null,100));
-      if(!next){document.getElementById('history-rows').replaceChildren();historyCount=0;}
+      if(!next){clearVoidSelection();document.getElementById('history-rows').replaceChildren();historyCount=0;}
       appendHistory(snap.docs);historyCount+=snap.size;
       historyFilter=f;historyCursor=snap.docs.at(-1)||historyCursor;
       status.textContent=historyCount+' transactions loaded · '+f.from+' to '+f.to+' · '+f.outlet+(snap.size<100?' · End of results':'');
@@ -679,23 +732,25 @@ tr:last-child td{border-bottom:none}
       <button class="filter-btn" id="history-search" onclick="searchHistory()">Search</button>
       <button class="filter-btn" id="history-export" onclick="exportTransactionHistory()">Export transactions CSV</button>
     </div>
+    <div style="display:flex;gap:10px;margin:10px 0"><button class="void-btn bulk-void-button" onclick="openBulkVoid()" disabled>Void selected (0)</button><button class="filter-btn" onclick="clearVoidSelection()">Clear selection</button></div>
     <p id="history-status" role="status">Choose dates and press Search. History does not load automatically.</p>
-    <div class="table-wrap"><table><thead><tr><th>Receipt</th><th>Date / Time</th><th>Outlet</th><th>Items</th><th>Payment</th><th>Total</th><th>Status</th></tr></thead><tbody id="history-rows"></tbody></table></div>
+    <div class="table-wrap"><table><thead><tr><th><input type="checkbox" data-void-group="history-rows" aria-label="Select loaded history" onchange="selectVisibleVoids('history-rows',this.checked)"></th><th>Receipt</th><th>Date / Time</th><th>Outlet</th><th>Items</th><th>Payment</th><th>Total</th><th>Status</th></tr></thead><tbody id="history-rows"></tbody></table></div>
     <button class="filter-btn" id="history-next" onclick="searchHistory(true)" disabled>Load next 100</button>
   </div>
 
   <!-- Transaction log -->
   <div class="table-card">
     <div class="sec-title" style="margin-bottom:14px">Transaction Log — Latest 60 <span style="font-size:10px;font-weight:400;text-transform:none;color:var(--text3)">(selected date and outlet)</span></div>
+<div style="display:flex;gap:10px;margin:10px 0"><button class="void-btn bulk-void-button" onclick="openBulkVoid()" disabled>Void selected (0)</button><button class="filter-btn" onclick="clearVoidSelection()">Clear selection</button></div>
     <div class="table-wrap">
       <table>
         <thead>
           <tr>
-            <th>TXN ID</th><th>Date / Time</th><th>Outlet</th><th>Items</th><th>Payment</th><th>Total</th><th>Action</th>
+            <th><input type="checkbox" data-void-group="txn-log" aria-label="Select visible transactions" onchange="selectVisibleVoids('txn-log',this.checked)"></th><th>TXN ID</th><th>Date / Time</th><th>Outlet</th><th>Items</th><th>Payment</th><th>Total</th><th>Action</th>
           </tr>
         </thead>
         <tbody id="txn-log">
-          <tr><td colspan="7" class="td-empty">Connecting to Firebase…</td></tr>
+          <tr><td colspan="8" class="td-empty">Connecting to Firebase…</td></tr>
         </tbody>
       </table>
     </div>
@@ -727,6 +782,8 @@ setInterval(()=>{document.getElementById('dash-clock').textContent=new Date().to
 // Void modal
 let currentVoidId = null, currentVoidTxnId = null;
 function openVoidModal(firebaseId, txnId) {
+  document.getElementById('void-confirm-btn').textContent='Void Transaction';
+  document.getElementById('void-confirm-btn').disabled=false;
   currentVoidId = firebaseId;
   currentVoidTxnId = txnId;
   document.getElementById('void-sub').textContent = 'Voiding: ' + txnId + ' — enter admin PIN to confirm.';
@@ -777,4 +834,5 @@ function dashCheckPin(){
 </script>
 </body>
 </html>
+
 
