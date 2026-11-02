@@ -1,5 +1,5 @@
-const CACHE = 'wtp-v32-product-permissions';
-const SHELL = ['index.html', 'dashboard.html', 'logo.png'];
+const CACHE = 'wtp-v33-dashboard-analysis';
+const SHELL = ['index.html', 'dashboard.html', 'logo.png', 'analytics.js?v=33'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL.map(url=>new Request(url,{cache:"reload"})))));
@@ -24,5 +24,6 @@ self.addEventListener('fetch', e => {
     }))
   );
 });
+
 
 
