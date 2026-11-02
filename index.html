@@ -11,7 +11,7 @@
 <link rel="manifest" href="manifest.json">
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-  import { getFirestore, collection, addDoc, serverTimestamp, doc, updateDoc, query, where, getDocs, onSnapshot, setDoc, increment } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+  import { getFirestore, collection, addDoc, serverTimestamp, doc, updateDoc, query, where, getDocs, onSnapshot, setDoc, increment, runTransaction, getDocFromServer } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
   const cfg = {
     apiKey:"AIzaSyAPCeTkc3cTqRNIDRhKQcpjrsUcckIUg68",
     authDomain:"whatthepuff-be1ce.firebaseapp.com",
@@ -34,8 +34,11 @@
   window._onSnapshot = onSnapshot;
   window._setDoc = setDoc;
   window._increment = increment;
+  window._runTransaction = runTransaction;
+  window._getDocFromServer = getDocFromServer;
   window._fbReady = true;
-  setTimeout(()=>{ const d=document.getElementById('sync-dot'); if(d) d.className='sync-dot synced'; },0);
+  window.dispatchEvent(new Event("wtp-firebase-ready"));
+
 
   window._loadTodayTxns = async function(dateStr, outlet, cb){
     try{
@@ -548,7 +551,7 @@ html,body{height:100%;background:#1a1a1a;font-family:'Segoe UI',system-ui,sans-s
       </div>
       <span class="topbar-stats" id="topbar-stats" onclick="unlockStats()" style="cursor:pointer">🔒 Sales</span>
       <span class="topbar-spacer"></span>
-      <div class="sync-dot" id="sync-dot"></div>
+      <div class="sync-dot" id="sync-dot"></div><button id="sale-sync" onclick="void reliableSync()" style="background:none;border:0;color:var(--amber);font-size:12px">Checking sales…</button>
       <span class="topbar-time" id="clock"></span>
       <div class="nav-btns">
         <button class="nav-btn" onclick="openPrinterSettings()">🖨 Printer</button>
@@ -960,6 +963,7 @@ function closeAdminModal(){
 
 // ============ OUTLET CHANGE ============
 function changeOutlet(){
+  if(saleClosing||paymentInFlight){showToast('⚠️','Finish the current sale or report first');return;}
   requireAdmin('Change Outlet','Enter admin PIN to switch outlet',null,'outlet');
 }
 
@@ -995,28 +999,6 @@ function setSyncStatus(s){
 }
 
 // ============ FIREBASE ============
-async function saveToCloud(txn){
-  setSyncStatus('syncing');
-  try{
-    if(!window._fbReady) throw new Error('FB not ready');
-    const ref = await window._addDoc(window._collection(window._db,'transactions'),{
-      txnId:txn.id, date:txn.date, time:txn.time, hour:txn.hour,
-      outlet:txn.outlet, items:txn.items, subtotal:txn.subtotal,
-      discount:txn.discount, total:txn.total, payments:txn.payments,
-      discountType:txn.discountType, timestamp:txn.timestamp,
-      voided:false, createdAt:window._serverTimestamp()
-    });
-    txn.firebaseId=ref.id;
-    setSyncStatus('synced');
-  } catch(e){
-    setSyncStatus('');
-    const local=JSON.parse(localStorage.getItem('wtp_txns')||'[]');
-    local.push(txn);
-    localStorage.setItem('wtp_txns',JSON.stringify(local));
-    showToast('⚠️','Offline — saved locally');
-  }
-}
-
 // ============ INVENTORY ============
 function stockDocId(outlet,itemId){ return outlet.replace(/\s+/g,'_')+'__'+itemId; }
 
@@ -1106,12 +1088,15 @@ function bootSkuCatalog(){
 }
 
 function openProductModal(){
+  productShowArchived=false;
   document.getElementById('product-modal').classList.add('open');
   renderProductModalBody();
 }
 let newProductImgData='';
+let productShowArchived=false;
+function toggleArchivedProducts(){productShowArchived=!productShowArchived;renderProductModalBody();}
 function renderProductModalBody(){
-  const rows=allSkus.map(s=>`<div class="inv-item-row-edit">
+  const rows=allSkus.filter(s=>productShowArchived||s.active!==false).map(s=>`<div class="inv-item-row-edit">
     <img src="${s.img}" alt="" style="width:36px;height:36px;object-fit:cover;border-radius:6px;flex-shrink:0">
     <input class="inv-input" style="flex:2" value="${(s.name||'').replace(/"/g,'&quot;')}" onchange="updateSku('${s.fid}',{name:this.value})">
     <input class="inv-input" style="flex:1;max-width:90px" type="number" min="0" step="0.10" value="${s.price}" onchange="updateSku('${s.fid}',{price:parseFloat(this.value)||0})">
@@ -1119,7 +1104,8 @@ function renderProductModalBody(){
   </div>`).join('');
   document.getElementById('product-body').innerHTML=
     `<div class="modal-sub">Edit name/price directly — saves automatically. Archived products disappear from the sale screen but past sales keep their history.</div>
-    ${rows||'<div class="inv-empty">No products.</div>'}
+    <button type="button" class="btn-secondary" onclick="toggleArchivedProducts()">${productShowArchived?'Hide archived':'Show archived'} (${allSkus.filter(s=>s.active===false).length})</button>
+    ${rows||'<div class="inv-empty">No active products.</div>'}
     <div class="modal-title" style="font-size:13px;margin-top:16px">Add New Product</div>
     <div class="inv-form-row">
       <input class="inv-input" id="prod-new-name" placeholder="Product name" style="flex:2">
@@ -1742,7 +1728,7 @@ function confirmPayment(){
 }
 
 // ============ TRANSACTION ============
-function endTransaction(payments,sundry){
+async function endTransaction(payments,sundry){
   if(paymentInFlight) return;
   paymentInFlight=true;
   try{
@@ -1771,10 +1757,10 @@ function endTransaction(payments,sundry){
       ...(sundryAmt>0&&{sundry:sundryAmt}),
       timestamp:now.toISOString()
     };
+    await reliableSave(txn);
     transactions.push(txn);
     lastReceipt=txn;
-    saveToSession(txn);
-    saveToCloud(txn);
+    void reliableSync();
     applyInventoryForSale(cart);
     closePayment();
     clearCart();
@@ -1787,6 +1773,8 @@ function endTransaction(payments,sundry){
     const oc=document.getElementById('order-complete');
     oc.classList.add('open');
     // Keep totals and change visible until the cashier dismisses them.
+  } catch(e) {
+    showToast('⚠️','Sale NOT completed: '+e.message+'. Keep this order and retry.');
   } finally {
     paymentInFlight=false;
   }
@@ -2162,6 +2150,151 @@ function showToast(icon,msg){
   window._toastTimer=setTimeout(()=>t.classList.remove('show'),3000);
 }
 
+// Single-tablet sales reliability v1.1. One atomic localStorage record holds
+// the outbox and local report session; a failed write never confirms a sale.
+const SALE_STATE_KEY='wtp_reliable_sales_v1';
+let saleState, saleStorageError='', saleSyncJob=null, saleClosing=false, saleTabLocked=false;
+if(navigator.locks){navigator.locks.request('wtp-sales-writer',{ifAvailable:true},async lock=>{saleTabLocked=!!lock;if(lock){void reliableSync();await new Promise(()=>{});}});}
+function saleRead(){
+ const raw=localStorage.getItem(SALE_STATE_KEY);
+ if(raw){const v=JSON.parse(raw);if(v.version!==1||!Array.isArray(v.pending)||!v.sessions||!v.closed)throw Error('Saved sales data is invalid');return v;}
+ const v={version:1,pending:[],sessions:{},closed:{},lastZ:{}};
+ for(let n=0;n<localStorage.length;n++){
+  const k=localStorage.key(n);
+  if(k.startsWith('wtp_session_outlet_')){const a=JSON.parse(localStorage.getItem(k));if(!Array.isArray(a))throw Error('Invalid old session');v.sessions[decodeURIComponent(k.slice('wtp_session_outlet_'.length))]=a;}
+ }
+ const legacy=JSON.parse(localStorage.getItem('wtp_session')||'[]');
+ for(const t of legacy){if(!Object.hasOwn(v.sessions,t.outlet))v.sessions[t.outlet]=legacy.filter(x=>x.outlet===t.outlet);}
+ for(const t of JSON.parse(localStorage.getItem('wtp_txns')||'[]')){
+  const key=JSON.stringify([t.outlet,t.timestamp,t.id]);
+  if(!v.pending.some(x=>x.legacyKey===key)){
+   const copy={...t,saleDocId:'sale-'+crypto.randomUUID(),legacyKey:key};v.pending.push(copy);
+   const a=v.sessions[t.outlet]||(v.sessions[t.outlet]=[]);
+   if(!a.some(x=>x.id===t.id&&x.timestamp===t.timestamp))a.push(copy);
+  }
+ }
+ localStorage.setItem(SALE_STATE_KEY,JSON.stringify(v));return v;
+}
+function saleCommit(next){localStorage.setItem(SALE_STATE_KEY,JSON.stringify(next));saleState=next;}
+function saleStatus(message){
+ const b=document.getElementById('sale-sync');if(!b)return;
+ b.textContent=saleStorageError?'Sales storage unavailable':message||(saleState.pending.length+' pending · '+(navigator.onLine?'tap to sync':'offline'));
+ setSyncStatus(saleSyncJob?'syncing':!saleStorageError&&!saleState.pending.length&&navigator.onLine?'synced':'');
+}
+try{saleState=saleRead();}catch(e){saleStorageError=e.message;}
+async function reliableSave(txn){
+ if(saleStorageError)throw Error(saleStorageError);
+ if(!saleTabLocked)throw Error('Close other POS tabs and use an updated Chrome browser');
+ if(saleClosing||saleState.closed[txn.outlet])throw Error('Register is closed or closing');
+ txn.saleDocId='sale-'+crypto.randomUUID();
+ const next=structuredClone(saleState);
+ next.pending.push(txn);(next.sessions[txn.outlet]||(next.sessions[txn.outlet]=[])).push(txn);
+ saleCommit(next);saleStatus();
+}
+async function uploadSale(t){
+ if(!navigator.onLine||!window._fbReady)throw Error('Connect to the internet to sync');
+ // Old failed uploads may already have reached Firebase. Reconcile by original
+ // receipt identity before assigning a new document. Never rewrite a voided sale.
+ if(t.legacyKey){
+  const q=window._query(window._collection(window._db,'transactions'),window._where('txnId','==',t.id),window._where('timestamp','==',t.timestamp));
+  const snap=await window._getDocs(q);let existing=null;
+  snap.forEach(d=>{if(d.data().outlet===t.outlet)existing=d.id;});
+  if(existing)return existing;
+ }
+ const ref=window._doc(window._db,'transactions',t.saleDocId);
+ await window._runTransaction(window._db,async tx=>{
+  const old=await tx.get(ref);if(old.exists())return;
+  const {legacyKey,...data}=t;
+  tx.set(ref,{...data,txnId:t.id,voided:false,createdAt:window._serverTimestamp()});
+ });
+ return t.saleDocId;
+}
+function reliableSync(){
+ if(saleStorageError||!saleTabLocked){saleStatus();return Promise.resolve(false);}
+ if(saleSyncJob)return saleSyncJob;
+ saleSyncJob=(async()=>{
+  try{
+   while(saleState.pending.length){
+    const t=saleState.pending[0],firebaseId=await uploadSale(t);
+    const next=structuredClone(saleState);
+    next.pending=next.pending.filter(x=>x.saleDocId!==t.saleDocId);
+    for(const a of Object.values(next.sessions))for(const x of a)if(x.saleDocId===t.saleDocId||(t.legacyKey&&x.id===t.id&&x.timestamp===t.timestamp))x.firebaseId=firebaseId;
+    saleCommit(next);
+   }
+   return true;
+  }catch(e){saleStatus('Sync pending · tap to retry');return false;}
+ })().finally(()=>{saleSyncJob=null;saleStatus();});
+ saleStatus();return saleSyncJob;
+}
+loadOutletSession=function(){
+ ++outletLoadGeneration;outletSalesLoading=false;transactions=[];txnCounter=0;lastReceipt=null;statsUnlocked=false;reportPrintSnapshot=null;sessionInvLog=[];
+ if(saleStorageError){saleStatus();return;}
+ transactions=structuredClone(saleState.sessions[currentOutlet]||[]);
+ for(const t of transactions){const m=(t.id||'').match(/TXN(\d+)/);if(m)txnCounter=Math.max(txnCounter,Number(m[1]));}
+ updateTopbarStats();
+ document.getElementById('terminal-closed').classList.toggle('open',!!saleState.closed[currentOutlet]);
+ void reliableSync();
+};
+async function refreshSaleVoids(){
+ if(!navigator.onLine||!window._fbReady)throw Error('Reconnect before closing');
+ const outlet=currentOutlet;
+ const local=saleState.sessions[outlet]||[];
+ const refreshed=await Promise.all(local.map(async t=>{
+  const id=t.firebaseId||t._firebaseId||t.saleDocId;
+  if(!id){
+   const q=window._query(window._collection(window._db,'transactions'),window._where('txnId','==',t.id),window._where('timestamp','==',t.timestamp));
+   const snap=await window._getDocs(q);let found=null;
+   snap.forEach(d=>{if(d.data().outlet===t.outlet)found={...t,firebaseId:d.id,voided:!!d.data().voided};});
+   if(!found)throw Error('An older sale has not been verified in the dashboard');
+   return found;
+  }
+  const d=await window._getDocFromServer(window._doc(window._db,'transactions',id));
+  if(!d.exists())throw Error('A saved sale is missing from the dashboard. Check before closing');
+  return {...t,voided:!!d.data().voided};
+ }));
+ const byId=new Map(refreshed.map(t=>[t.saleDocId||JSON.stringify([t.id,t.timestamp]),t]));
+ const next=structuredClone(saleState);next.sessions[outlet]=(next.sessions[outlet]||[]).map(t=>byId.get(t.saleDocId||JSON.stringify([t.id,t.timestamp]))||t);saleCommit(next);
+ if(currentOutlet===outlet)transactions=structuredClone(next.sessions[outlet]);
+}
+const originalOpenX=openXReport;
+openXReport=async function(){
+ if(saleClosing)return;
+ if(navigator.onLine&&!saleStorageError){await reliableSync();try{await refreshSaleVoids();}catch(e){showToast('⚠️','Using local totals: '+e.message);}}
+ originalOpenX();
+ const note=document.createElement('p');note.textContent=(navigator.onLine?'Local session':'OFFLINE · local session')+' · '+(saleState?.pending.length||0)+' pending sales';document.getElementById('report-content').prepend(note);
+};
+confirmZReport=async function(){
+ if(paymentInFlight||saleClosing||saleStorageError||saleState.closed[currentOutlet])return;
+ if(Object.keys(cart).length){showToast('⚠️','Finish or clear the current order first');return;}
+ saleClosing=true;
+ try{
+  if(!navigator.onLine)throw Error('Reconnect before Z closing');
+  if(!await reliableSync()||saleState.pending.length)throw Error('Sales are still pending. Tap the sync status and retry');
+  await refreshSaleVoids();
+  const now=new Date(),data=buildReportData(),next=structuredClone(saleState);
+  next.lastZ[currentOutlet]={closedAt:now.toISOString(),data,sales:next.sessions[currentOutlet]||[]};
+  next.sessions[currentOutlet]=[];next.closed[currentOutlet]=true;saleCommit(next);
+  document.getElementById('zconfirm-overlay').classList.remove('open');
+  document.getElementById('report-content').innerHTML=buildReportHTML('Z',now,true,data);document.getElementById('report-modal').classList.add('open');
+ }catch(e){showToast('⚠️','Z not closed: '+e.message);}finally{saleClosing=false;saleStatus();}
+};
+reopenTerminal=function(){
+ if(paymentInFlight||saleClosing||saleStorageError)return;
+ try{
+  if(!saleState.closed[currentOutlet])throw Error('Complete Z closing first');
+  const next=structuredClone(saleState);next.closed[currentOutlet]=false;saleCommit(next);
+  transactions=[];txnCounter=0;splitPayments=[];lastReceipt=null;statsUnlocked=false;
+  document.getElementById('terminal-closed').classList.remove('open');
+  document.getElementById('login-screen').classList.remove('hidden');pinEntry='';updatePinDisplay();showToast('✅','New session started at zero');
+ }catch(e){showToast('⚠️',e.message);}
+};
+window.addEventListener('online',()=>void reliableSync());
+window.addEventListener('offline',()=>saleStatus());
+window.addEventListener('wtp-firebase-ready',()=>void reliableSync());
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')void reliableSync();});
+setInterval(()=>void reliableSync(),30000);
+saleStatus();void reliableSync();
+
 renderAll();
 
 // ============ SERVICE WORKER ============
@@ -2175,28 +2308,6 @@ document.addEventListener('visibilitychange',()=>{
 });
 
 // ============ OFFLINE SYNC ============
-window.addEventListener('online', async function(){
-  const queued=JSON.parse(localStorage.getItem('wtp_txns')||'[]');
-  if(!queued.length) return;
-  showToast('📶','Syncing '+queued.length+' offline transaction(s)…');
-  const failed=[];
-  for(const txn of queued){
-    try{
-      if(!window._fbReady) throw new Error('not ready');
-      await window._addDoc(window._collection(window._db,'transactions'),{
-        txnId:txn.id, date:txn.date, time:txn.time, hour:txn.hour,
-        outlet:txn.outlet, items:txn.items, subtotal:txn.subtotal,
-        discount:txn.discount, total:txn.total, payments:txn.payments,
-        discountType:txn.discountType, timestamp:txn.timestamp,
-        voided:false, createdAt:window._serverTimestamp()
-      });
-    } catch(e){ failed.push(txn); }
-  }
-  localStorage.setItem('wtp_txns',JSON.stringify(failed));
-  setSyncStatus(failed.length?'':'synced');
-  showToast(failed.length?'⚠️':'✅', failed.length?failed.length+' transaction(s) still pending':'All transactions synced');
-});
-
 window.addEventListener('online', async function(){
   const adjQueue=JSON.parse(localStorage.getItem('wtp_stock_adj')||'[]');
   const failedAdj=[];
@@ -2225,4 +2336,5 @@ window.addEventListener('online', async function(){
 </script>
 </body>
 </html>
+
 
