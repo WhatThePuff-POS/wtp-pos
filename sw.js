@@ -1,9 +1,9 @@
-const CACHE = 'wtp-v29-sku-sales-mix';
+const CACHE = 'wtp-v30-reliable-single-tablet';
 const SHELL = ['index.html', 'dashboard.html', 'logo.png'];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)));
-  self.skipWaiting();
+  e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL.map(url=>new Request(url,{cache:"reload"})))));
+  // Activate only after existing POS windows close.
 });
 
 self.addEventListener('activate', e => {
@@ -24,3 +24,4 @@ self.addEventListener('fetch', e => {
     }))
   );
 });
+
