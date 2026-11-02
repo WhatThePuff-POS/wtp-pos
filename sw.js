@@ -1,4 +1,4 @@
-const CACHE = 'wtp-v31-outlet-products-bulk-void';
+const CACHE = 'wtp-v32-product-permissions';
 const SHELL = ['index.html', 'dashboard.html', 'logo.png'];
 
 self.addEventListener('install', e => {
