@@ -24,6 +24,20 @@
   const app = initializeApp(cfg);
   const db = getFirestore(app);
 
+
+  window.wtpFetchAnalysis=async function(range,progress){
+    const start=new Date(range.from+'T00:00:00+08:00').toISOString(),end=new Date(range.to+'T23:59:59.999+08:00').toISOString();
+    async function fetchAll(name){let cursor=null,rows=[];while(true){
+      const parts=[where('timestamp','>=',start),where('timestamp','<=',end),orderBy('timestamp','asc')];
+      if(cursor)parts.push(startAfter(cursor));parts.push(limit(500));
+      const snap=await getDocs(query(collection(db,name),...parts));rows.push(...snap.docs.map(d=>({_firebaseId:d.id,...d.data()})));
+      if(rows.length>50000)throw Error('Too many records. Choose a shorter range.');
+      progress(rows.length);if(snap.size<500)break;cursor=snap.docs.at(-1);
+    }return rows;}
+    const [sales,waste]=await Promise.all([fetchAll('transactions'),fetchAll('wastageEntries')]);return {sales,waste};
+  };
+  window.wtpFetchProductNames=async function(){const snap=await getDocs(collection(db,'skus'));return snap.docs.map(d=>d.data().name).filter(Boolean);};
+
   let allTransactions = [];
   const SKU_NAMES = ["Original","Sardine","Cheesy","Black Pepper","Char Siew","Otah"];
   const INV_OUTLETS = ['Bedok 216', 'Haig Road', 'Punggol Coast'];
@@ -603,6 +617,23 @@ tr:last-child td{border-bottom:none}
 .dash-pin-btn{height:62px;border-radius:var(--radius);border:1px solid var(--border2);background:var(--bg3);color:var(--text);font-size:22px;font-weight:500;cursor:pointer;display:flex;align-items:center;justify-content:center;touch-action:manipulation;-webkit-user-select:none;user-select:none;transition:all 0.1s}
 .dash-pin-btn:active{transform:scale(0.95);background:var(--bg4)}
 .dash-pin-error{color:var(--red);font-size:13px;min-height:18px}
+
+.dashboard-tabs{display:flex;gap:8px;padding:12px 24px;border-bottom:1px solid var(--border);flex-wrap:wrap}
+.dashboard-tabs .selected{background:var(--amber);color:#111}
+.analysis-note{font-size:12px;color:var(--text3);line-height:1.6;margin:8px 0}
+.analysis-heading{font-size:14px;margin:18px 0 12px}
+.analysis-form{display:flex;gap:12px;flex-wrap:wrap;align-items:end;margin:14px 0}
+.analysis-form label{font-size:12px;color:var(--text2);display:flex;flex-direction:column;gap:6px}
+.analysis-form input,.analysis-form select{max-width:200px}
+.daily-bars{display:flex;gap:8px;overflow-x:auto;align-items:end;padding:16px 4px 12px;min-height:215px}
+.daily-column{flex:1;min-width:62px;text-align:center;font-size:10px;color:var(--text2)}
+.daily-column span{display:block;white-space:nowrap;font-family:monospace;margin-bottom:5px}
+.daily-track{height:155px;display:flex;align-items:end;background:var(--bg3);border-radius:4px}
+.daily-fill{width:100%;background:var(--amber);border-radius:4px 4px 0 0}
+.daily-column small{display:block;margin-top:6px}
+#dashboard-health{font-size:10px;color:var(--text3);margin-left:8px}
+[hidden]{display:none!important}
+
 </style>
 </head>
 <body>
@@ -637,11 +668,26 @@ tr:last-child td{border-bottom:none}
 <div class="topbar">
   <span class="topbar-brand">What The Puff</span>
   <div class="live-badge"><div class="live-dot" id="live-dot"></div>Live</div>
-  <span class="topbar-spacer"></span>
+  <span id="dashboard-health">v33</span><span class="topbar-spacer"></span>
   <span class="topbar-time" id="dash-clock"></span>
 </div>
 
-<div class="filters">
+<nav class="dashboard-tabs" aria-label="Dashboard sections">
+<button class="filter-btn selected" data-tab-button="overview" onclick="showDashboardTab('overview')">Overview</button>
+<button class="filter-btn" data-tab-button="finance" onclick="showDashboardTab('finance')">Financial analysis</button>
+<button class="filter-btn" data-tab-button="performance" onclick="showDashboardTab('performance')">Outlet performance</button>
+<button class="filter-btn" data-tab-button="comparison" onclick="showDashboardTab('comparison')">Date comparisons</button>
+</nav>
+<div id="analysis-controls" class="table-card" style="margin:16px 24px" hidden>
+<div class="analysis-form">
+<label>Outlet<select class="filter-select" id="analysis-outlet"><option>All</option><option>Bedok 216</option><option>Haig Road</option><option>Punggol Coast</option></select></label>
+<label>A · From<input class="filter-input" type="date" id="range-a-from"></label><label>A · To<input class="filter-input" type="date" id="range-a-to"></label>
+<label>B · From<input class="filter-input" type="date" id="range-b-from"></label><label>B · To<input class="filter-input" type="date" id="range-b-to"></label>
+<button class="filter-btn" id="analysis-load" onclick="loadAnalysis()">Load analysis</button></div>
+<div class="analysis-form"><button class="filter-btn" onclick="analysisPreset('last7')">Last 7 vs previous 7 days</button><button class="filter-btn" onclick="analysisPreset('week')">This week vs same days last week</button><button class="filter-btn" onclick="analysisPreset('weekday')">Today vs same weekday last week</button><button class="filter-btn" onclick="analysisPreset('today')">Today vs yesterday</button></div>
+<p id="analysis-status" class="analysis-note" role="status">Choose dates, then load. This reads saved sales and wastage only when requested.</p>
+</div>
+<div class="filters" data-dashboard-tab="overview">
   <span class="filter-label">Outlet:</span>
   <select class="filter-select" id="outlet-filter" onchange="refreshDashboard()">
     <option>All</option><option>Bedok 216</option><option>Haig Road</option><option>Punggol Coast</option>
@@ -661,6 +707,7 @@ tr:last-child td{border-bottom:none}
 <div id="error-banner" style="display:none;background:#280e0e;border-bottom:1px solid #e05050;padding:10px 24px;font-size:13px;color:#e05050;font-family:monospace;"></div>
 
 <div class="content">
+<div data-dashboard-tab="overview">
 
   <!-- Stat cards -->
   <div class="stat-grid">
@@ -757,6 +804,29 @@ tr:last-child td{border-bottom:none}
   </div>
 
 </div>
+<section data-dashboard-tab="finance" hidden>
+<div class="table-card"><div class="sec-title">Financial analysis · Period A</div><div id="finance-results"></div></div>
+<div class="table-card"><div class="sec-title">SKU cost profiles</div>
+<p class="analysis-note">Costs and targets are saved only in this browser. Export settings to back up or import on another device. WTP is not GST-registered: include non-recoverable supplier GST. Costs are entered per selling unit, not per carton.</p>
+<div class="analysis-form">
+<label>SKU<select class="filter-select" id="cost-sku" onchange="chooseCostSku()"></select></label>
+<label>Category<select class="filter-select" id="cost-category"><option>Puffs</option><option>Non-puffs</option><option>Other</option></select></label>
+<label>Effective from<input class="filter-input" type="date" id="cost-from"></label>
+<label>Unit cost ($)<input class="filter-input" type="number" id="cost-unit" min="0" step="0.0001" placeholder="e.g. 1.0682"></label>
+<label>GST rate (%)<input class="filter-input" type="number" id="cost-gst-rate" min="0" max="100" step="0.1" value="9"></label>
+<label><span>Entered cost includes GST</span><input type="checkbox" id="cost-gst-included" checked></label>
+<button class="filter-btn" onclick="saveCostProfile()">Save cost profile</button></div>
+<p class="analysis-note">Saving the same SKU and effective date replaces that profile. Use an earlier effective date to analyse earlier sales. Load analysis first to populate product names, including products sold previously.</p>
+<div id="cost-history"></div>
+<div class="analysis-form"><button class="filter-btn" onclick="exportAnalysisSettings()">Export costs & targets</button><label>Import settings<input type="file" accept="application/json,.json" onchange="importAnalysisSettings(this.files[0]);this.value=''" aria-label="Import costs and targets"></label></div>
+</div></section>
+<section data-dashboard-tab="performance" hidden>
+<div class="table-card"><div class="sec-title">Outlet performance · A versus B</div><div id="performance-results"></div></div>
+<div class="table-card"><div class="sec-title">Daily net-sales targets</div><div class="analysis-form" id="target-inputs"></div><button class="filter-btn" onclick="saveAnalysisTargets()">Save targets</button></div>
+</section>
+<section data-dashboard-tab="comparison" hidden><div class="table-card"><div class="sec-title">Sales comparison</div><div id="comparison-results"></div></div></section>
+
+</div>
 
 <!-- VOID MODAL -->
 <div class="void-overlay" id="void-overlay">
@@ -832,7 +902,9 @@ function dashCheckPin(){
   }
 }
 </script>
+<script src="analytics.js?v=33"></script>
 </body>
 </html>
+
 
 
