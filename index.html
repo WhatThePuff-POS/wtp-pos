@@ -551,7 +551,7 @@ html,body{height:100%;background:#1a1a1a;font-family:'Segoe UI',system-ui,sans-s
       </div>
       <span class="topbar-stats" id="topbar-stats" onclick="unlockStats()" style="cursor:pointer">🔒 Sales</span>
       <span class="topbar-spacer"></span>
-      <div class="sync-dot" id="sync-dot"></div><button id="sale-sync" onclick="void reliableSync()" style="background:none;border:0;color:var(--amber);font-size:12px">Checking sales…</button>
+      <div class="sync-dot" id="sync-dot"></div>
       <span class="topbar-time" id="clock"></span>
       <div class="nav-btns">
         <button class="nav-btn" onclick="openPrinterSettings()">🖨 Printer</button>
@@ -561,6 +561,7 @@ html,body{height:100%;background:#1a1a1a;font-family:'Segoe UI',system-ui,sans-s
         <button class="nav-btn danger" onclick="openZReport()">Z-Report</button>
       </div>
     </div>
+<div style="display:flex;justify-content:space-between;gap:8px;padding:5px 12px;border-bottom:1px solid var(--border);flex-shrink:0"><span style="font-size:11px;color:var(--text3)" id="pos-version">v33</span><button id="sale-sync" onclick="void reliableSync()" style="background:none;border:0;color:var(--amber);font-size:12px">Checking sales…</button></div>
     <div class="sku-area" id="sku-area"></div>
   </div>
 
@@ -2209,7 +2210,10 @@ function saleRead(){
 function saleCommit(next){localStorage.setItem(SALE_STATE_KEY,JSON.stringify(next));saleState=next;}
 function saleStatus(message){
  const b=document.getElementById('sale-sync');if(!b)return;
- b.textContent=saleStorageError?'Sales storage unavailable':message||(saleState.pending.length+' pending · '+(navigator.onLine?'tap to sync':'offline'));
+ b.textContent=saleStorageError?'Sales storage unavailable':message||(saleState.pending.length+' pending · '+(navigator.onLine?'online · tap to sync':'offline'));
+ const last=saleState?.lastSyncAt?new Date(saleState.lastSyncAt).toLocaleString('en-SG',{timeZone:'Asia/Singapore',day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}):'none yet';
+ b.title='Last successful sale upload: '+last+' · This tablet only';
+ const version=document.getElementById('pos-version');if(version){version.textContent='v33 · Upload '+last;version.title=b.title;}
  setSyncStatus(saleSyncJob?'syncing':!saleStorageError&&!saleState.pending.length&&navigator.onLine?'synced':'');
 }
 try{saleState=saleRead();}catch(e){saleStorageError=e.message;}
@@ -2249,6 +2253,7 @@ function reliableSync(){
     const t=saleState.pending[0],firebaseId=await uploadSale(t);
     const next=structuredClone(saleState);
     next.pending=next.pending.filter(x=>x.saleDocId!==t.saleDocId);
+    next.lastSyncAt=new Date().toISOString();
     for(const a of Object.values(next.sessions))for(const x of a)if(x.saleDocId===t.saleDocId||(t.legacyKey&&x.id===t.id&&x.timestamp===t.timestamp))x.firebaseId=firebaseId;
     saleCommit(next);
    }
@@ -2368,6 +2373,7 @@ window.addEventListener('online', async function(){
 </script>
 </body>
 </html>
+
 
 
 
