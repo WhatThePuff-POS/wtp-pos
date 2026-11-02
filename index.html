@@ -1050,18 +1050,30 @@ function bootInventoryCatalog(){
 // ============ SKU CATALOG (products) ============
 const PRODUCT_OUTLETS=['Bedok 216','Haig Road','Punggol Coast'];
 let productOutlet=null,productShowOther=false;
-function productStatus(s,outlet){return s.deleted?'deleted':s.outletStatus?.[outlet]||(s.active===false?'archived':'active');}
+function productStatus(s,outlet){
+ if(s.deleted)return 'deleted';
+ if(s.active&&typeof s.active==='object'&&!Array.isArray(s.active))return s.active[outlet]||'deleted';
+ return s.outletStatus?.[outlet]||(s.active===false?'archived':'active');
+}
+function productDeleted(s){return PRODUCT_OUTLETS.every(o=>productStatus(s,o)==='deleted');}
 function sellingProducts(){return allSkus.filter(s=>productStatus(s,currentOutlet)==='active');}
 function changeProductOutlet(outlet){productOutlet=outlet;productShowArchived=false;productShowOther=false;renderProductModalBody();}
-function setProductAvailability(fid,status){
- const s=allSkus.find(p=>p.fid===fid);if(!s)return;
+async function setProductAvailability(fid,status){
+ const s=allSkus.find(p=>p.fid===fid),outlet=productOutlet;if(!s||!PRODUCT_OUTLETS.includes(outlet))return;
  if(Object.keys(cart).length){showToast('⚠️','Finish or clear the order before changing availability');return;}
- const fields={['outletStatus.'+productOutlet]:status};
- if(status==='deleted'){
-  if(!confirm('Delete '+s.name+' from '+productOutlet+'? Other outlet menus and past sales will be kept.'))return;
-  if(PRODUCT_OUTLETS.every(o=>o===productOutlet||productStatus(s,o)==='deleted'))fields.deleted=true;
- }
- updateSku(fid,fields);
+ if(!['active','archived','deleted'].includes(status))return;
+ if(status==='deleted'&&!confirm('Delete '+s.name+' from '+outlet+'? Other outlet menus and past sales will be kept.'))return;
+ try{
+  if(!window._fbReady||!navigator.onLine)throw Error('Reconnect to update products');
+  const ref=window._doc(window._db,'skus',fid);
+  await window._runTransaction(window._db,async tx=>{
+   const snap=await tx.get(ref);if(!snap.exists())throw Error('Product no longer exists. Reopen Products');
+   const latest=snap.data();
+   const active=Object.fromEntries(PRODUCT_OUTLETS.map(o=>[o,o===outlet?status:productStatus(latest,o)]));
+   tx.update(ref,{active});
+  });
+  showToast('✅','Product updated for '+outlet);
+ }catch(e){showToast('⚠️','Product update failed: '+(e.code||e.message));}
 }
 function sortedSkus(items){ return [...items].sort((a,b)=>(a.order??a.id)-(b.order??b.id)); }
 
@@ -1112,7 +1124,7 @@ let newProductImgData='';
 let productShowArchived=false;
 function toggleArchivedProducts(){productShowArchived=!productShowArchived;renderProductModalBody();}
 function renderProductModalBody(){
-  const rows=allSkus.filter(s=>!s.deleted&&(productStatus(s,productOutlet)==='active'||(productShowArchived&&productStatus(s,productOutlet)==='archived')||(productShowOther&&productStatus(s,productOutlet)==='deleted'))).map(s=>`<div class="inv-item-row-edit">
+  const rows=allSkus.filter(s=>!productDeleted(s)&&(productStatus(s,productOutlet)==='active'||(productShowArchived&&productStatus(s,productOutlet)==='archived')||(productShowOther&&productStatus(s,productOutlet)==='deleted'))).map(s=>`<div class="inv-item-row-edit">
     <img src="${s.img}" alt="" style="width:36px;height:36px;object-fit:cover;border-radius:6px;flex-shrink:0">
     <input class="inv-input" style="flex:2" value="${(s.name||'').replace(/"/g,'&quot;')}" onchange="updateSku('${s.fid}',{name:this.value})">
     <input class="inv-input" style="flex:1;max-width:90px" type="number" min="0" step="0.10" value="${s.price}" onchange="updateSku('${s.fid}',{price:parseFloat(this.value)||0})">
@@ -1177,14 +1189,14 @@ function submitNewSku(){
   const nextId=allSkus.reduce((m,s)=>Math.max(m,s.id||0),0)+1;
   const nextOrder=allSkus.reduce((m,s)=>Math.max(m,s.order??0),0)+1;
   window._addDoc(window._collection(window._db,'skus'),{
-    id:nextId,name,price,img:newProductImgData,order:nextOrder,active:true,outletStatus:Object.fromEntries(PRODUCT_OUTLETS.map(o=>[o,o===productOutlet?'active':'deleted'])),createdAt:window._serverTimestamp()
+    id:nextId,name,price,img:newProductImgData,order:nextOrder,active:Object.fromEntries(PRODUCT_OUTLETS.map(o=>[o,o===productOutlet?'active':'deleted'])),createdAt:window._serverTimestamp()
   }).then(()=>{
     showToast('✅','Added product: '+name);
   }).catch(()=>showToast('⚠️','Could not add — check connection/permissions'));
 }
 function updateSku(fid,fields){
-  window._updateDoc(window._doc(window._db,'skus',fid),fields).catch(()=>{
-    showToast('⚠️','Update failed — check connection');
+  return window._updateDoc(window._doc(window._db,'skus',fid),fields).catch(e=>{
+    showToast('⚠️','Product update failed: '+(e.code||e.message));
   });
 }
 
