@@ -1,4 +1,4 @@
-const CACHE = 'wtp-v30-reliable-single-tablet';
+const CACHE = 'wtp-v31-outlet-products-bulk-void';
 const SHELL = ['index.html', 'dashboard.html', 'logo.png'];
 
 self.addEventListener('install', e => {
@@ -24,4 +24,5 @@ self.addEventListener('fetch', e => {
     }))
   );
 });
+
 
