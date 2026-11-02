@@ -759,7 +759,7 @@ const DEFAULT_SKUS = [
 ];
 
 let SKUS = DEFAULT_SKUS.slice();     // active products shown on the sale grid — synced from Firestore 'skus' collection
-let allSkus = DEFAULT_SKUS.slice();  // includes archived, for the Manage Products admin screen
+let allSkus = (()=>{try{const saved=JSON.parse(localStorage.getItem('wtp_sku_catalog')||'null');return Array.isArray(saved)?saved:DEFAULT_SKUS.slice();}catch(e){return DEFAULT_SKUS.slice();}})();  // includes archived, for the Manage Products admin screen
 
 // ============ STATE ============
 let cart={}, seniorDiscount=false, transactions=[], txnCounter=0;
@@ -1048,6 +1048,21 @@ function bootInventoryCatalog(){
 }
 
 // ============ SKU CATALOG (products) ============
+const PRODUCT_OUTLETS=['Bedok 216','Haig Road','Punggol Coast'];
+let productOutlet=null,productShowOther=false;
+function productStatus(s,outlet){return s.deleted?'deleted':s.outletStatus?.[outlet]||(s.active===false?'archived':'active');}
+function sellingProducts(){return allSkus.filter(s=>productStatus(s,currentOutlet)==='active');}
+function changeProductOutlet(outlet){productOutlet=outlet;productShowArchived=false;productShowOther=false;renderProductModalBody();}
+function setProductAvailability(fid,status){
+ const s=allSkus.find(p=>p.fid===fid);if(!s)return;
+ if(Object.keys(cart).length){showToast('⚠️','Finish or clear the order before changing availability');return;}
+ const fields={['outletStatus.'+productOutlet]:status};
+ if(status==='deleted'){
+  if(!confirm('Delete '+s.name+' from '+productOutlet+'? Other outlet menus and past sales will be kept.'))return;
+  if(PRODUCT_OUTLETS.every(o=>o===productOutlet||productStatus(s,o)==='deleted'))fields.deleted=true;
+ }
+ updateSku(fid,fields);
+}
 function sortedSkus(items){ return [...items].sort((a,b)=>(a.order??a.id)-(b.order??b.id)); }
 
 async function ensureSkuCatalog(){
@@ -1074,7 +1089,8 @@ function subscribeSkuCatalog(){
     allSkus=[];
     snap.forEach(d=>allSkus.push({fid:d.id,...d.data()}));
     allSkus=sortedSkus(allSkus);
-    SKUS=allSkus.filter(s=>s.active!==false);
+    try{localStorage.setItem('wtp_sku_catalog',JSON.stringify(allSkus));}catch(e){showToast('⚠️','Could not cache product menu for offline use');}
+    SKUS=sellingProducts();
     renderSKUs();
     if(document.getElementById('product-modal').classList.contains('open')) renderProductModalBody();
   }, ()=>{});
@@ -1088,7 +1104,7 @@ function bootSkuCatalog(){
 }
 
 function openProductModal(){
-  productShowArchived=false;
+  productOutlet=currentOutlet;productShowOther=false;productShowArchived=false;
   document.getElementById('product-modal').classList.add('open');
   renderProductModalBody();
 }
@@ -1096,15 +1112,18 @@ let newProductImgData='';
 let productShowArchived=false;
 function toggleArchivedProducts(){productShowArchived=!productShowArchived;renderProductModalBody();}
 function renderProductModalBody(){
-  const rows=allSkus.filter(s=>productShowArchived||s.active!==false).map(s=>`<div class="inv-item-row-edit">
+  const rows=allSkus.filter(s=>!s.deleted&&(productStatus(s,productOutlet)==='active'||(productShowArchived&&productStatus(s,productOutlet)==='archived')||(productShowOther&&productStatus(s,productOutlet)==='deleted'))).map(s=>`<div class="inv-item-row-edit">
     <img src="${s.img}" alt="" style="width:36px;height:36px;object-fit:cover;border-radius:6px;flex-shrink:0">
     <input class="inv-input" style="flex:2" value="${(s.name||'').replace(/"/g,'&quot;')}" onchange="updateSku('${s.fid}',{name:this.value})">
     <input class="inv-input" style="flex:1;max-width:90px" type="number" min="0" step="0.10" value="${s.price}" onchange="updateSku('${s.fid}',{price:parseFloat(this.value)||0})">
-    <span class="inv-archive-btn" onclick="updateSku('${s.fid}',{active:${s.active===false}})">${s.active===false?'Restore':'Archive'}</span>
+    <span class="inv-archive-btn" onclick="setProductAvailability('${s.fid}','${productStatus(s,productOutlet)==='active'?'archived':'active'}')">${productStatus(s,productOutlet)==='active'?'Archive':productStatus(s,productOutlet)==='deleted'?'Add here':'Restore'}</span>
+    ${productStatus(s,productOutlet)==='archived'?`<button class="inv-archive-btn" onclick="setProductAvailability('${s.fid}','deleted')">Delete</button>`:''}
   </div>`).join('');
   document.getElementById('product-body').innerHTML=
-    `<div class="modal-sub">Edit name/price directly — saves automatically. Archived products disappear from the sale screen but past sales keep their history.</div>
-    <button type="button" class="btn-secondary" onclick="toggleArchivedProducts()">${productShowArchived?'Hide archived':'Show archived'} (${allSkus.filter(s=>s.active===false).length})</button>
+    `<div class="modal-sub">Availability applies only to the selected outlet. Names, photos and prices are shared. Past sales are preserved.</div>
+    <label>Outlet <select class="inv-input" onchange="changeProductOutlet(this.value)">${PRODUCT_OUTLETS.map(o=>`<option${o===productOutlet?' selected':''}>${o}</option>`).join('')}</select></label>
+    <button type="button" class="btn-secondary" onclick="productShowOther=!productShowOther;renderProductModalBody()">${productShowOther?'Hide other products':'Add existing product'}</button>
+    <button type="button" class="btn-secondary" onclick="toggleArchivedProducts()">${productShowArchived?'Hide archived':'Show archived'} (${allSkus.filter(s=>productStatus(s,productOutlet)==='archived').length})</button>
     ${rows||'<div class="inv-empty">No active products.</div>'}
     <div class="modal-title" style="font-size:13px;margin-top:16px">Add New Product</div>
     <div class="inv-form-row">
@@ -1158,7 +1177,7 @@ function submitNewSku(){
   const nextId=allSkus.reduce((m,s)=>Math.max(m,s.id||0),0)+1;
   const nextOrder=allSkus.reduce((m,s)=>Math.max(m,s.order??0),0)+1;
   window._addDoc(window._collection(window._db,'skus'),{
-    id:nextId,name,price,img:newProductImgData,order:nextOrder,active:true,createdAt:window._serverTimestamp()
+    id:nextId,name,price,img:newProductImgData,order:nextOrder,active:true,outletStatus:Object.fromEntries(PRODUCT_OUTLETS.map(o=>[o,o===productOutlet?'active':'deleted'])),createdAt:window._serverTimestamp()
   }).then(()=>{
     showToast('✅','Added product: '+name);
   }).catch(()=>showToast('⚠️','Could not add — check connection/permissions'));
@@ -1989,7 +2008,7 @@ function reprintLast(){
 // ============ REPORTS ============
 function buildReportData(){
   const outletTransactions=transactions.filter(t=>t.outlet===currentOutlet && !t.voided);
-  const skuQty={};SKUS.forEach(s=>skuQty[s.name]=0);
+  const skuQty={},skuRevenue={};
   const payTotals={cash:0,paynow:0,cdc:0,voucher:0,sundry:0};
   const payCount={cash:0,paynow:0,cdc:0,voucher:0,sundry:0};
   let grossRev=0,discountTotal=0;
@@ -1999,13 +2018,13 @@ function buildReportData(){
   outletTransactions.forEach(t=>{
     grossRev+=t.subtotal;
     discountTotal+=t.discount;
-    t.items.forEach(i=>{if(skuQty[i.name]!==undefined)skuQty[i.name]+=i.qty;});
+    t.items.forEach(i=>{skuQty[i.name]=(skuQty[i.name]||0)+i.qty;skuRevenue[i.name]=(skuRevenue[i.name]||0)+(typeof i.sub==='number'?i.sub:i.qty*i.price);});
     t.payments.forEach(p=>{payTotals[p.type]=(payTotals[p.type]||0)+p.amount;payCount[p.type]=(payCount[p.type]||0)+1;});
     const h=t.hour;
     hourlyRev[h]=(hourlyRev[h]||0)+t.total;
     hourlyCount[h]=(hourlyCount[h]||0)+1;
   });
-  return{outlet:currentOutlet,skuQty,payTotals,payCount,grossRev,discountTotal,netRev:grossRev-discountTotal,hourlyRev,hourlyCount,txnCount:outletTransactions.length};
+  return{outlet:currentOutlet,skuQty,skuRevenue,payTotals,payCount,grossRev,discountTotal,netRev:grossRev-discountTotal,hourlyRev,hourlyCount,txnCount:outletTransactions.length};
 }
 function openXReport(){
   if(outletSalesLoading){showToast('⏳','Loading outlet sales. Please try again shortly.');return;}
@@ -2071,8 +2090,8 @@ function buildReportText(type,now,d){
     rule,'REVENUE SUMMARY',row('Transactions',d.txnCount),
     row('Gross Revenue',fmt(d.grossRev)),row('Senior Discounts','-'+fmt(d.discountTotal)),
     row('Net Revenue',fmt(d.netRev)),rule,'SALES BY SKU (before discounts)'];
-  const sold=SKUS.filter(s=>(d.skuQty[s.name]||0)!==0);
-  lines.push(...(sold.length?sold.map(s=>row(s.name,(d.skuQty[s.name]||0)+' pcs '+fmt((d.skuQty[s.name]||0)*s.price))):['No items sold']));
+  const sold=Object.keys(d.skuQty).filter(name=>d.skuQty[name]!==0).map(name=>({name}));
+  lines.push(...(sold.length?sold.map(s=>row(s.name,(d.skuQty[s.name]||0)+' pcs '+fmt(d.skuRevenue?.[s.name]||0))):['No items sold']));
   lines.push(rule,'PAYMENT TYPES');
   lines.push(...Object.keys(d.payTotals).filter(p=>p!=='sundry'||d.payTotals[p])
     .map(p=>row(p,fmt(d.payTotals[p]||0)+' ('+(d.payCount[p]||0)+')')));
@@ -2086,7 +2105,7 @@ function buildReportText(type,now,d){
 function buildReportHTML(type,now,isZ,d){
   reportPrintSnapshot={type,text:buildReportText(type,now,d)};
   const dtStr=now.toLocaleDateString('en-SG',{day:'2-digit',month:'short',year:'numeric'})+' '+now.toLocaleTimeString('en-SG',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
-  const skuRows=SKUS.map(s=>`<div class="report-row"><span class="rl">${s.name}</span><span class="rv">${d.skuQty[s.name]||0} pcs · ${fmt((d.skuQty[s.name]||0)*s.price)}</span></div>`).join('');
+  const skuRows=Object.keys(d.skuQty).map(name=>({name})).map(s=>`<div class="report-row"><span class="rl">${s.name}</span><span class="rv">${d.skuQty[s.name]||0} pcs · ${fmt(d.skuRevenue?.[s.name]||0)}</span></div>`).join('');
   const payRows=['cash','paynow','cdc','voucher','sundry'].filter(p=>p!=='sundry'||(d.payTotals.sundry||0)>0).map(p=>`<div class="report-row"><span class="rl">${p.charAt(0).toUpperCase()+p.slice(1)}</span><span class="rv">${fmt(d.payTotals[p]||0)} (${d.payCount[p]||0})</span></div>`).join('');
   // Hourly bars: fix — use actual hour integers
   const hours=[];for(let h=8;h<=21;h++) hours.push(h);
@@ -2227,6 +2246,7 @@ function reliableSync(){
  saleStatus();return saleSyncJob;
 }
 loadOutletSession=function(){
+ SKUS=sellingProducts();renderSKUs();
  ++outletLoadGeneration;outletSalesLoading=false;transactions=[];txnCounter=0;lastReceipt=null;statsUnlocked=false;reportPrintSnapshot=null;sessionInvLog=[];
  if(saleStorageError){saleStatus();return;}
  transactions=structuredClone(saleState.sessions[currentOutlet]||[]);
@@ -2336,5 +2356,6 @@ window.addEventListener('online', async function(){
 </script>
 </body>
 </html>
+
 
 
