@@ -561,7 +561,7 @@ html,body{height:100%;background:#1a1a1a;font-family:'Segoe UI',system-ui,sans-s
         <button class="nav-btn danger" onclick="openZReport()">Z-Report</button>
       </div>
     </div>
-<div style="display:flex;justify-content:space-between;gap:8px;padding:5px 12px;border-bottom:1px solid var(--border);flex-shrink:0"><span style="font-size:11px;color:var(--text3)" id="pos-version">v33</span><button id="sale-sync" onclick="void reliableSync()" style="background:none;border:0;color:var(--amber);font-size:12px">Checking sales…</button></div>
+<div style="display:flex;justify-content:space-between;gap:8px;padding:5px 12px;border-bottom:1px solid var(--border);flex-shrink:0"><span style="font-size:11px;color:var(--text3)" id="pos-version">v34</span><button id="sale-sync" onclick="void reliableSync()" style="background:none;border:0;color:var(--amber);font-size:12px">Checking sales…</button></div>
     <div class="sku-area" id="sku-area"></div>
   </div>
 
@@ -1057,7 +1057,30 @@ function productStatus(s,outlet){
  return s.outletStatus?.[outlet]||(s.active===false?'archived':'active');
 }
 function productDeleted(s){return PRODUCT_OUTLETS.every(o=>productStatus(s,o)==='deleted');}
-function sellingProducts(){return allSkus.filter(s=>productStatus(s,currentOutlet)==='active');}
+function productPrice(s,outlet){
+ const value=s.active&&typeof s.active==='object'?s.active._prices?.[outlet]:undefined;
+ return typeof value==='number'&&Number.isFinite(value)&&value>=0?value:s.price;
+}
+function sellingProducts(){return allSkus.filter(s=>productStatus(s,currentOutlet)==='active').map(s=>({...s,price:productPrice(s,currentOutlet)}));}
+async function setProductPrice(fid,value){
+ const price=Number(value),outlet=productOutlet;
+ if(!PRODUCT_OUTLETS.includes(outlet)||value.trim()===''||!Number.isFinite(price)||price<0){showToast('⚠️','Enter a valid price');return;}
+ if(Object.keys(cart).length){showToast('⚠️','Finish or clear the order before changing prices');renderProductModalBody();return;}
+ try{
+  if(!window._fbReady||!navigator.onLine)throw Error('Reconnect to update prices');
+  const ref=window._doc(window._db,'skus',fid);
+  await window._runTransaction(window._db,async tx=>{
+   const snap=await tx.get(ref);if(!snap.exists())throw Error('Product no longer exists');
+   const latest=snap.data(),previous=latest.active&&typeof latest.active==='object'?latest.active:{};
+   const active={...previous,...Object.fromEntries(PRODUCT_OUTLETS.map(o=>[o,productStatus(latest,o)]))};
+   active._prices={...previous._prices};
+   for(const o of PRODUCT_OUTLETS)if(!Object.hasOwn(active._prices,o))active._prices[o]=productPrice(latest,o);
+   active._prices[outlet]=Math.round(price*100)/100;
+   tx.update(ref,{active});
+  });
+  showToast('✅','Price updated for '+outlet);
+ }catch(e){showToast('⚠️','Price update failed: '+(e.code||e.message));}
+}
 function changeProductOutlet(outlet){productOutlet=outlet;productShowArchived=false;productShowOther=false;renderProductModalBody();}
 async function setProductAvailability(fid,status){
  const s=allSkus.find(p=>p.fid===fid),outlet=productOutlet;if(!s||!PRODUCT_OUTLETS.includes(outlet))return;
@@ -1070,7 +1093,7 @@ async function setProductAvailability(fid,status){
   await window._runTransaction(window._db,async tx=>{
    const snap=await tx.get(ref);if(!snap.exists())throw Error('Product no longer exists. Reopen Products');
    const latest=snap.data();
-   const active=Object.fromEntries(PRODUCT_OUTLETS.map(o=>[o,o===outlet?status:productStatus(latest,o)]));
+   const active={...(latest.active&&typeof latest.active==='object'?latest.active:{}),...Object.fromEntries(PRODUCT_OUTLETS.map(o=>[o,o===outlet?status:productStatus(latest,o)]))};
    tx.update(ref,{active});
   });
   showToast('✅','Product updated for '+outlet);
@@ -1128,12 +1151,12 @@ function renderProductModalBody(){
   const rows=allSkus.filter(s=>!productDeleted(s)&&(productStatus(s,productOutlet)==='active'||(productShowArchived&&productStatus(s,productOutlet)==='archived')||(productShowOther&&productStatus(s,productOutlet)==='deleted'))).map(s=>`<div class="inv-item-row-edit">
     <img src="${s.img}" alt="" style="width:36px;height:36px;object-fit:cover;border-radius:6px;flex-shrink:0">
     <input class="inv-input" style="flex:2" value="${(s.name||'').replace(/"/g,'&quot;')}" onchange="updateSku('${s.fid}',{name:this.value})">
-    <input class="inv-input" style="flex:1;max-width:90px" type="number" min="0" step="0.10" value="${s.price}" onchange="updateSku('${s.fid}',{price:parseFloat(this.value)||0})">
+    <input class="inv-input" style="flex:1;max-width:90px" type="number" min="0" step="0.10" value="${productPrice(s,productOutlet)}" onchange="setProductPrice('${s.fid}',this.value)">
     <span class="inv-archive-btn" onclick="setProductAvailability('${s.fid}','${productStatus(s,productOutlet)==='active'?'archived':'active'}')">${productStatus(s,productOutlet)==='active'?'Archive':productStatus(s,productOutlet)==='deleted'?'Add here':'Restore'}</span>
     ${productStatus(s,productOutlet)==='archived'?`<button class="inv-archive-btn" onclick="setProductAvailability('${s.fid}','deleted')">Delete</button>`:''}
   </div>`).join('');
   document.getElementById('product-body').innerHTML=
-    `<div class="modal-sub">Availability applies only to the selected outlet. Names, photos and prices are shared. Past sales are preserved.</div>
+    `<div class="modal-sub">Availability and prices apply only to the selected outlet. Names and photos are shared. Past sales are preserved.</div>
     <label>Outlet <select class="inv-input" onchange="changeProductOutlet(this.value)">${PRODUCT_OUTLETS.map(o=>`<option${o===productOutlet?' selected':''}>${o}</option>`).join('')}</select></label>
     <button type="button" class="btn-secondary" onclick="productShowOther=!productShowOther;renderProductModalBody()">${productShowOther?'Hide other products':'Add existing product'}</button>
     <button type="button" class="btn-secondary" onclick="toggleArchivedProducts()">${productShowArchived?'Hide archived':'Show archived'} (${allSkus.filter(s=>productStatus(s,productOutlet)==='archived').length})</button>
@@ -2213,7 +2236,7 @@ function saleStatus(message){
  b.textContent=saleStorageError?'Sales storage unavailable':message||(saleState.pending.length+' pending · '+(navigator.onLine?'online · tap to sync':'offline'));
  const last=saleState?.lastSyncAt?new Date(saleState.lastSyncAt).toLocaleString('en-SG',{timeZone:'Asia/Singapore',day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}):'none yet';
  b.title='Last successful sale upload: '+last+' · This tablet only';
- const version=document.getElementById('pos-version');if(version){version.textContent='v33 · Upload '+last;version.title=b.title;}
+ const version=document.getElementById('pos-version');if(version){version.textContent='v34 · Upload '+last;version.title=b.title;}
  setSyncStatus(saleSyncJob?'syncing':!saleStorageError&&!saleState.pending.length&&navigator.onLine?'synced':'');
 }
 try{saleState=saleRead();}catch(e){saleStorageError=e.message;}
