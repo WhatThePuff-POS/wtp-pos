@@ -1,4 +1,4 @@
-const CACHE = 'wtp-v33-dashboard-analysis';
+const CACHE = 'wtp-v34-outlet-prices';
 const SHELL = ['index.html', 'dashboard.html', 'logo.png', 'analytics.js?v=33'];
 
 self.addEventListener('install', e => {
